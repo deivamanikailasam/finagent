@@ -55,7 +55,12 @@ def summarise_payload(payload: Any) -> dict[str, Any]:
 
 def _minimum_necessary(value: Any) -> Any:
     # Anything structured could hold line items or payment details, so only its summary is logged.
-    return value if isinstance(value, _SCALARS) else summarise_payload(value)
+    if isinstance(value, _SCALARS):
+        return value
+    try:
+        return summarise_payload(value)
+    except Exception:
+        return {"summary_unavailable": True}
 
 
 class JsonFormatter(logging.Formatter):
@@ -93,6 +98,12 @@ class _SafeStreamHandler(logging.StreamHandler):
             pass  # logging must never break a run
 
 
+def _emit_dropped() -> None:
+    for handler in logger.handlers:
+        if isinstance(handler, _SafeStreamHandler):
+            handler.handleError(None)
+
+
 def configure_logging(
     stream: TextIO | None = None, clock: Clock | None = None, level: int = logging.INFO
 ) -> None:
@@ -112,14 +123,17 @@ def log_event(
     level: int = logging.INFO,
     **fields: Any,
 ) -> None:
-    safe_fields = {key: _minimum_necessary(value) for key, value in fields.items()}
-    logger.log(
-        level,
-        "%s",
-        event,
-        extra={
-            "finagent_fields": safe_fields,
-            "finagent_outcome": outcome,
-            "finagent_duration_ms": duration_ms,
-        },
-    )
+    try:
+        safe_fields = {key: _minimum_necessary(value) for key, value in fields.items()}
+        logger.log(
+            level,
+            "%s",
+            event,
+            extra={
+                "finagent_fields": safe_fields,
+                "finagent_outcome": outcome,
+                "finagent_duration_ms": duration_ms,
+            },
+        )
+    except Exception:
+        _emit_dropped()  # a logging problem must not change the outcome of a run

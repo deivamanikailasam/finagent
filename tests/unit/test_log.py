@@ -128,3 +128,16 @@ def test_formatting_failure_never_prints_the_raw_value(stream, capsys):
     assert records(stream)[0]["event"] == "log_record_dropped"
     assert "12345678" not in stream.getvalue()
     assert "12345678" not in capsys.readouterr().err
+
+
+def test_unusual_payloads_do_not_crash_the_run(stream):
+    cycle = {}
+    cycle["self"] = cycle
+
+    class Broken:
+        def __str__(self):
+            raise RuntimeError("boom")
+
+    for payload in ({1: "a", "b": 2}, cycle, Broken()):
+        log_event("tool.result", payload=payload)
+    assert [record["payload"] for record in records(stream)] == [{"summary_unavailable": True}] * 3
