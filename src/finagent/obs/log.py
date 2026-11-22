@@ -19,7 +19,18 @@ _run_id: ContextVar[str | None] = ContextVar("finagent_run_id", default=None)
 _DROPPED_RECORD = '{"level": "ERROR", "event": "log_record_dropped"}'
 _SENSITIVE_KEY_TOKENS = {"abn", "account", "acct", "bank", "bsb", "tfn"}
 _SAFE_KEY = re.compile(r"[a-z][a-z0-9_]{0,63}")
-_ALLOWED_FIELDS = {"action", "amount", "code", "count", "node", "reason_code", "status", "tool"}
+_ALLOWED_FIELDS = {
+    "abstained_lanes",
+    "action",
+    "amount",
+    "code",
+    "count",
+    "node",
+    "principal_role",
+    "reason_code",
+    "status",
+    "tool",
+}
 _SCALARS = (str, int, float, bool, Decimal, date, datetime, type(None))
 
 logger = logging.getLogger("finagent")

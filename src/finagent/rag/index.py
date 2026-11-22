@@ -1,5 +1,7 @@
 """BM25 index over chunks. Filtering and lanes belong to the retrieval tool (WP 3.2)."""
 
+import math
+from collections import Counter
 from collections.abc import Sequence
 
 import bm25s
@@ -18,6 +20,25 @@ class BM25Index:
         corpus = [tokenize(chunk.prefixed_text if use_prefix else chunk.text) for chunk in self.chunks]
         self._bm25 = bm25s.BM25()
         self._bm25.index(corpus, show_progress=False)
+        self._terms = {chunk.chunk_id: set(tokens) for chunk, tokens in zip(self.chunks, corpus, strict=True)}
+        self._doc_freq = Counter(term for terms in self._terms.values() for term in terms)
+        self._max_idf = max(self._idf_for(freq) for freq in self._doc_freq.values())
+
+    def _idf_for(self, doc_freq: int) -> float:
+        return math.log(1 + (len(self.chunks) - doc_freq + 0.5) / (doc_freq + 0.5))
+
+    def idf(self, token: str) -> float:
+        """Inverse document frequency. A term outside the corpus counts at the corpus maximum."""
+        freq = self._doc_freq.get(token)
+        return self._idf_for(freq) if freq else self._max_idf
+
+    def coverage(self, query_tokens: list[str], chunk: Chunk) -> float:
+        """Share of the query's IDF weight that this chunk matches (decision log IX)."""
+        terms = set(query_tokens)
+        total = sum(self.idf(term) for term in terms)
+        if total == 0:
+            return 0.0
+        return sum(self.idf(term) for term in terms & self._terms[chunk.chunk_id]) / total
 
     def retrieve(
         self, query_tokens: list[str], k: int, weight_mask: np.ndarray | None = None
