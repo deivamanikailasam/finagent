@@ -1,0 +1,7 @@
+{
+  "as_of": "2026-09-15T09:00:00+10:00",
+  "authority_source": "FIN-POL-003",
+  "faults": {
+    "get_purchase_order": "timeout_always"
+  }
+}

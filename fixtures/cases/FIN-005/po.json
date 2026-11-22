@@ -1,0 +1,52 @@
+{
+  "approval_status": "APPROVED",
+  "currency": "AUD",
+  "freight_permitted": false,
+  "lines": [
+    {
+      "kind": "goods",
+      "line_value": "6000.00",
+      "po_line_ref": "PO-L1",
+      "qty": 40,
+      "qty_invoiced_to_date": 0,
+      "unit_price": "150.00"
+    },
+    {
+      "kind": "goods",
+      "line_value": "3000.00",
+      "po_line_ref": "PO-L2",
+      "qty": 100,
+      "qty_invoiced_to_date": 0,
+      "unit_price": "30.00"
+    }
+  ],
+  "po_ref": "PO-4475",
+  "receipts": [
+    {
+      "date": "2026-08-28",
+      "po_line_ref": "PO-L1",
+      "qty": 40,
+      "receipter": "rcv-01",
+      "service_confirmed_by": null
+    },
+    {
+      "date": "2026-08-28",
+      "po_line_ref": "PO-L2",
+      "qty": 100,
+      "receipter": "rcv-01",
+      "service_confirmed_by": null
+    }
+  ],
+  "requester": "req-01",
+  "tolerances": {
+    "freight_absolute": "75.00",
+    "goods_absolute": "50.00",
+    "goods_percent": "1.00",
+    "services_absolute": "100.00",
+    "services_percent": "2.00"
+  },
+  "totals": {
+    "excl_tax": "9000.00",
+    "incl_tax": "9900.00"
+  }
+}

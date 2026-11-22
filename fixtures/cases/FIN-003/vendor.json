@@ -1,0 +1,14 @@
+{
+  "bank_changed_at": null,
+  "created_at": "2026-01-12T09:00:00+11:00",
+  "created_by": "vg-officer-01",
+  "fingerprint": "877339c0e0bbc521b797c2804c989f36836251ed801383a75fc69f9eacde618a",
+  "last_paid_at": "2026-08-03T09:00:00+10:00",
+  "last_updated": "2026-01-12T09:00:00+11:00",
+  "legal_name": "Example Supplies Pty Ltd",
+  "modification_history": [],
+  "payment_details_masked": "****1111",
+  "risk_flags": [],
+  "status": "ACTIVE",
+  "vendor_id": "V-100"
+}

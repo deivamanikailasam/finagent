@@ -1,0 +1,17 @@
+[
+  {
+    "attachment_hash": null,
+    "currency": "AUD",
+    "fingerprint": "25cd6184e448e2b29e77280c55291ebac9ca14ecb7c36c4656a069192ecc2152",
+    "gross": "9900.00",
+    "hold_category": null,
+    "invoice_date": "2026-07-20",
+    "invoice_no_norm": "inv1001",
+    "originating_run": null,
+    "po_number": "PO-4471",
+    "prior_outcome": "APPROVE_FOR_POSTING",
+    "record_id": "H-0001",
+    "status": "PAID",
+    "vendor_id": "V-100"
+  }
+]

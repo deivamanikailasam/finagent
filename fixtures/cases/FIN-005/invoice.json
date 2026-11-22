@@ -1,0 +1,36 @@
+{
+  "attachments": [],
+  "bill_to_entity": "Northstar Group Pty Ltd",
+  "currency": "AUD",
+  "gross": "9900.00",
+  "invoice_date": "2026-09-01",
+  "invoice_no": "INV-1005",
+  "legal_name": "Example Supplies Pty Ltd",
+  "lines": [
+    {
+      "description_id": "DESC-GOODS-1",
+      "line_id": "L1",
+      "line_total": "6000.00",
+      "po_line_ref": "PO-L1",
+      "qty": 40,
+      "tax_code": "GST",
+      "unit_price": "150.00"
+    },
+    {
+      "description_id": "DESC-GOODS-2",
+      "line_id": "L2",
+      "line_total": "3000.00",
+      "po_line_ref": "PO-L2",
+      "qty": 100,
+      "tax_code": "GST",
+      "unit_price": "30.00"
+    }
+  ],
+  "po_ref": "PO-4475",
+  "remit_to": {
+    "country": "AU",
+    "fingerprint": "877339c0e0bbc521b797c2804c989f36836251ed801383a75fc69f9eacde618a",
+    "last4": "1111"
+  },
+  "tax": "900.00"
+}
