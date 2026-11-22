@@ -203,3 +203,10 @@ def test_section_hash_ignores_whitespace_and_line_endings():
 def test_section_hash_rejects_a_missing_section():
     with pytest.raises(ValueError):
         section_hash("# T\n\n## 1. One\n", 2)
+
+
+def test_control_rule_wording_closes_the_reviewed_gaps():
+    by_id = {rule["id"]: rule["condition"] for rule in rules()}
+    assert "invoice legal name = vendor master legal name" in by_id["REQ-MATCHES-INVOICE"]
+    assert "no DFA posting-role register entry" in by_id["DFA-TIER"]
+    assert "owned by Financial Crime and Controls" in by_id["FRAUD-INDICATORS"]

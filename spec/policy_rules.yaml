@@ -75,7 +75,7 @@ rules:
         section: s1
         section_hash: 8b4eb05b619b0302e626567a5fc161477cd83c4e1ae40204e3883a059eaed54f
     template: invoice_evidence
-    condition: request vendor, amount and currency equal the invoice (interpretation); invoice gross = sum(line totals) + tax (002 s1 document total)
+    condition: request vendor, amount and currency equal the invoice (interpretation); invoice gross = sum(line totals) + tax (002 s1 document total); invoice legal name = vendor master legal name
     threshold: null
     outcome_on_fail: HOLD_FOR_INFORMATION
     category: OTHER_CONTROL_RISK
@@ -758,7 +758,7 @@ rules:
       section: s2
       section_hash: 04b37cf95ba0624a6c5ab05ef377a11187613906889eea982f13fcb73b58ee7a
     template: dfa_tier
-    condition: 'computes the required role: lowest role with limit >= commitment = max(invoice gross, PO total incl. tax); limits inclusive; fails only if no register entry has limit >= commitment'
+    condition: 'computes the required role: lowest role with limit >= commitment = max(invoice gross, PO total incl. tax); limits inclusive; fails only if no DFA posting-role register entry has limit >= commitment (Financial Control is not a posting role)'
     threshold:
       Cost Centre Manager: '10000.00'
       Department Director: '50000.00'
@@ -963,7 +963,7 @@ rules:
       - section: s4
         section_hash: 3b955f329302f1df2f0c35fc3bef97c593616f55888d3751f0568b3d639dbb1c
     template: fraud_indicators
-    condition: '>= 2 distinct indicators => escalate; exactly 1 recorded only; category BANK_CHANGE if a bank indicator is present, else OTHER_CONTROL_RISK'
+    condition: '>= 2 distinct indicators => escalate; exactly 1 recorded only; category BANK_CHANGE if a bank indicator is present, else OTHER_CONTROL_RISK; every FRAUD-INDICATORS escalation is owned by Financial Crime and Controls, whatever the primary category'
     threshold:
       escalate_at_distinct_indicators: 2
     outcome_on_fail: ESCALATE_CONTROL_REVIEW
