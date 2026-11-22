@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./.env)",
+      "Read(./_inputs/**)",
+      "Read(~/work/_private/**)",
+      "Edit(./.claude/**)",
+      "Edit(./CLAUDE.md)",
+      "Edit(./docs/DECISIONS_LOG.md)",
+      "Edit(./docs/REQUIREMENTS.md)",
+      "Edit(./docs/EXECUTION_PLAN_v2.md)",
+      "Edit(./docs/BUILD_GUIDE_MAC_v2.md)",
+      "Edit(./corpus/**)",
+      "Edit(./tests/acceptance/PROTECTED.sha256)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(gh:*)",
+      "Bash(make protect:*)",
+      "Bash(make promote:*)",
+      "Bash(*protect.py*)",
+      "Bash(make test-llm:*)",
+      "Bash(*--env-file*)",
+      "Bash(*finagent eval --live*)"
+    ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "allowUnsandboxedCommands": false,
+    "filesystem": {
+      "allowWrite": ["~/.cache/uv"],
+      "denyRead": ["./.env"]
+    }
+  }
+}
