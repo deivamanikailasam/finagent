@@ -1,0 +1,46 @@
+[project]
+name = "finagent"
+version = "0.1.0"
+description = "Financial processing and RAG workflow agent"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "pydantic>=2",
+    "pydantic-settings",
+    "typer",
+    "pyyaml",
+    "numpy",
+    "bm25s==0.3.16",
+    "anthropic",
+    "tzdata",
+]
+
+[project.scripts]
+finagent = "finagent.cli.main:app"
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-timeout",
+    "pytest-mock",
+    "ruff",
+]
+
+[build-system]
+requires = ["uv_build>=0.13.0,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+addopts = "-m 'not llm and not scenarios' --strict-markers"
+markers = [
+    "llm: needs a real API key",
+    "scenarios: end-to-end scenario cases",
+]
+timeout = 30
+testpaths = ["tests"]
+pythonpath = ["."]
