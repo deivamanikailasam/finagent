@@ -362,7 +362,7 @@ rules:
       section: s2
       section_hash: dddcb32f6c1a67632a6b8ae666ea74592f16e688c382946e7c2d84af5829baec
     template: po_matching
-    condition: invoiced qty <= received qty
+    condition: invoiced qty <= received qty (non-freight lines; freight needs no receipt)
     threshold: null
     outcome_on_fail: HOLD_FOR_INFORMATION
     category: QUANTITY_VARIANCE
@@ -384,7 +384,7 @@ rules:
       section: s3
       section_hash: ae657b296aee402a6ef06b6716eb573af1faea417e00a02b37925ed919a8c70c
     template: po_matching
-    condition: invoiced-to-date + this <= received (no splitting)
+    condition: invoiced-to-date + this <= received (no splitting; non-freight lines)
     threshold: null
     outcome_on_fail: HOLD_FOR_INFORMATION
     category: QUANTITY_VARIANCE
@@ -624,7 +624,7 @@ rules:
         expect:
           outcome: HOLD_FOR_INFORMATION
           category: DUPLICATE_RISK
-      # (9,900 - 9,840) / 9,840 = 0.6098% >= 0.5%; same PO alone is not a trigger
+      # (9,900 - 9,840) / 9,840 = 0.6098% >= 0.5%; prior invoice is on another PO, so qty invoiced to date stays 0
       - name: dup_not_probable_0_61_percent
         overrides:
           "history[0]":
@@ -636,7 +636,7 @@ rules:
             gross: '9840.00'
             invoice_date: '2026-08-25'
             fingerprint: null
-            po_number: PO-4471
+            po_number: PO-4472
             attachment_hash: null
             originating_run: null
             prior_outcome: null

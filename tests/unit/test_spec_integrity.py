@@ -210,3 +210,9 @@ def test_control_rule_wording_closes_the_reviewed_gaps():
     assert "invoice legal name = vendor master legal name" in by_id["REQ-MATCHES-INVOICE"]
     assert "no DFA posting-role register entry" in by_id["DFA-TIER"]
     assert "owned by Financial Crime and Controls" in by_id["FRAUD-INDICATORS"]
+
+
+def test_quantity_rules_exempt_freight():
+    by_id = {rule["id"]: rule["condition"] for rule in rules()}
+    assert "non-freight" in by_id["QTY-RECEIVED"]
+    assert "non-freight" in by_id["QTY-CUMULATIVE"]
