@@ -39,3 +39,19 @@ def test_output_does_not_contain_raw_value():
 def test_empty_account_cannot_match_another_empty_account(value):
     with pytest.raises(ValueError):
         fingerprint("account", value, KEY)
+
+
+def test_non_ascii_digits_are_rejected():
+    with pytest.raises(ValueError):
+        fingerprint("account", "12٣٤4", KEY)
+
+
+def test_kind_cannot_contain_the_separator():
+    with pytest.raises(ValueError):
+        fingerprint("a:b", "c", KEY)
+
+
+@pytest.mark.parametrize("empty", ["", b"", SecretStr("")])
+def test_empty_key_is_rejected(empty):
+    with pytest.raises(ValueError):
+        fingerprint("account", "12345678", empty)
