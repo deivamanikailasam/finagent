@@ -14,5 +14,5 @@ var/
 *.db-wal
 *.db-shm
 .claude/settings.local.json
-CLAUDE.md
+CLAUDE.local.md
 drafts/
