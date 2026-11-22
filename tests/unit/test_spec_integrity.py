@@ -1,6 +1,7 @@
 """Checks the signed-off specs. Reads spec/ from its final path, so it fails until the drafts are moved in."""
 
 import hashlib
+from collections import Counter
 from functools import lru_cache
 from pathlib import Path
 
@@ -235,3 +236,115 @@ def test_committed_row_is_found_before_the_budget_can_fail_the_run():
     assert policy["lookup_before_budget_check"] is True
     assert policy["row_found_takes_priority_over"] == "budget_exhausted"
     assert policy["block_row_found_calls_tool"] is False
+
+
+H, E, RD, RI = "HOLD_FOR_INFORMATION", "ESCALATE_CONTROL_REVIEW", "REJECT_DUPLICATE", "REJECT_INVALID"
+RULE_DECISIONS = {
+    "INV-HEADER": (RI, "OTHER_CONTROL_RISK"),
+    "INV-BILL-TO": (RI, "OTHER_CONTROL_RISK"),
+    "REQ-AMOUNT-POSITIVE": ("error", None),
+    "REQ-MATCHES-INVOICE": (H, "OTHER_CONTROL_RISK"),
+    "PO-REQUIRED": (H, "MISSING_PO"),
+    "PO-APPROVED": (H, "MISSING_PO"),
+    "RECEIPT-REQUIRED": (H, "MISSING_RECEIPT"),
+    "SERVICE-CONFIRMED": (H, "MISSING_RECEIPT"),
+    "TYPED-RECORD-PRECEDENCE": (H, "OTHER_CONTROL_RISK"),
+    "TOL-GOODS": (H, "PRICE_VARIANCE"),
+    "TOL-SERVICES": (H, "PRICE_VARIANCE"),
+    "TOL-FREIGHT": (H, "PRICE_VARIANCE"),
+    "QTY-RECEIVED": (H, "QUANTITY_VARIANCE"),
+    "QTY-CUMULATIVE": (H, "QUANTITY_VARIANCE"),
+    "LINE-MAPPED": (H, "QUANTITY_VARIANCE"),
+    "TAX-CHECK": (H, "TAX_QUERY"),
+    "NEGATIVE-LINE": (H, "OTHER_CONTROL_RISK"),
+    "DUP-EXACT-PAID": (RD, "DUPLICATE_RISK"),
+    "DUP-EXACT-HELD": (H, "DUPLICATE_RISK"),
+    "DUP-PRIOR-REJECTED": (H, "DUPLICATE_RISK"),
+    "DUP-PROBABLE": (H, "DUPLICATE_RISK"),
+    "VENDOR-STATUS": (H, "VENDOR_BLOCK"),
+    "BANK-CHANGE-HOLD": (H, "BANK_CHANGE"),
+    "REMIT-MATCHES-MASTER": (H, "BANK_CHANGE"),
+    "FIRST-PAYMENT-AFTER-BANK-CHANGE": (H, "AUTHORITY_GAP"),
+    "DFA-TIER": (H, "AUTHORITY_GAP"),
+    "DFA-AUTHORITATIVE-SOURCE": (H, "AUTHORITY_GAP"),
+    "HIGH-RISK": (H, "AUTHORITY_GAP"),
+    "SOD-ABOVE-25K": (E, "AUTHORITY_GAP"),
+    "FX-HOLD": (H, "OTHER_CONTROL_RISK"),
+    "FRAUD-INDICATORS": (E, {"if_bank_indicator": "BANK_CHANGE", "otherwise": "OTHER_CONTROL_RISK"}),
+}
+TOOL_ACCESS = {
+    "get_invoice_document": "read",
+    "get_vendor_record": "read",
+    "get_purchase_order": "read",
+    "get_authority_record": "read",
+    "check_invoice_history": "read",
+    "retrieve_finance_documents": "read",
+    "place_payment_block": "write",
+    "submit_finance_decision": "write",
+}
+
+
+def test_rule_outcomes_and_categories_are_pinned():
+    assert {rule["id"]: (rule["outcome_on_fail"], rule["category"]) for rule in rules()} == RULE_DECISIONS
+
+
+def test_vector_expectations_are_pinned():
+    expected = Counter(
+        vector["expect"].get("outcome") or vector["expect"]["error"]
+        for rule in rules()
+        for vector in rule["vectors"]
+    )
+    assert expected == {
+        "APPROVE_FOR_POSTING": 10,
+        H: 30,
+        E: 2,
+        RD: 1,
+        RI: 2,
+        "UNSUPPORTED_DOCUMENT_TYPE": 1,
+    }
+
+
+def test_graph_safety_structure_is_pinned():
+    spec = graph()
+    assert spec["pause_nodes"] == ["REQUEST_APPROVAL"]
+    assert spec["terminal"] == ["COMPLETE", "REJECTED_BY_APPROVER", "FAILED"]
+    wildcards = {(edge["when"], edge["to"]) for edge in spec["transitions"] if edge["from"] == "*"}
+    assert wildcards == {("budget_exhausted", "FAILED"), ("invariant_breach", "FAILED")}
+    exits = {(edge["when"], edge["to"]) for edge in spec["transitions"] if edge["from"] == "REQUEST_APPROVAL"}
+    assert exits == {
+        ("approved_post_or_reject", "REVALIDATE"),
+        ("approved_hold_or_escalate", "SUBMIT"),
+        ("approver_rejected", "PLACE_BLOCK"),
+        ("approver_not_eligible", "REQUEST_APPROVAL"),
+    }
+
+
+def test_permission_bindings_are_pinned():
+    spec = permissions()
+    block = spec["tools"]["place_payment_block"]
+    assert block["actions"]["BLOCK"]["bound_to"] == ["run_id", "rule_id", "action"]
+    assert block["authorisation_id"] == "sha256(run_id|rule_id|BLOCK)"
+    for rule in spec["tools"]["submit_finance_decision"]["actions"].values():
+        assert rule["bound_to"] == ["run_id", "payload_hash", "action"]
+        assert rule["never_state"] == ["INVALIDATED"]
+    assert spec["idempotency_key"]["formula"] == "sha256(run_id|approval_or_authorisation_id|action)"
+    assert {"tool": "submit_finance_decision", "authorisation": "SYSTEM_FAILSAFE"} in spec["never"]
+
+
+def test_trust_classes_are_pinned():
+    classes = {entry["doc_id"]: entry["trust_class"] for entry in registry()}
+    traps = {"FIN-POL-003-OLD": "SUPERSEDED", "ADV-001": "EXTERNAL_UNVERIFIED", "ADV-002": "OUT_OF_SCOPE"}
+    assert {doc: classes[doc] for doc in traps} == traps
+    assert all(value == "AUTHORITATIVE" for doc, value in classes.items() if doc not in traps)
+    restricted = next(entry for entry in registry() if entry["doc_id"] == "FIN-POL-004")
+    assert restricted["acl"] == ["agent", "approver_financial_control"]
+
+
+def test_tool_access_retry_and_backoff_are_pinned():
+    config = load_tool_declarations(ROOT / "config/tools.yaml")
+    assert {tool.name: tool.access for tool in config.tools} == TOOL_ACCESS
+    for tool in config.tools:
+        expected = ("timeout", "connection_error", "http_5xx", "http_429") if tool.access == "read" else ()
+        assert tool.retry_on == expected, tool.name
+    backoff = config.backoff
+    assert (backoff.base_s, backoff.multiplier, backoff.max_s, backoff.jitter) == (0.2, 2, 1.0, False)
