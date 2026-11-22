@@ -13,7 +13,7 @@ from finagent.tools.declarations import ToolDeclaration, load_tool_declarations
 
 ROOT = Path(__file__).resolve().parents[2]
 CORPUS = ROOT / "corpus"
-EXPECTED_VECTORS = 45
+EXPECTED_VECTORS = 46
 
 
 @lru_cache

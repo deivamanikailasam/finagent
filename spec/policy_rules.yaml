@@ -926,8 +926,11 @@ rules:
       version: '1.6'
       section: s3
       section_hash: 986e61fe4ca62a035165fe530c63b9d3a7fb385992e47af66f495c1ade00cd1a
+      additional_sections:
+      - section: s1
+        section_hash: d992cd8091f27fa5489c12080bc30e5ff8c6d3438f1cb84246af00f984ab9e7b
     template: fx
-    condition: non-AUD held; DFA not evaluated (AUD amount unknown)
+    condition: non-AUD held; DFA not evaluated (AUD amount unknown); invoice currency != PO currency also held (009 s1)
     threshold: null
     outcome_on_fail: HOLD_FOR_INFORMATION
     category: OTHER_CONTROL_RISK
@@ -940,6 +943,13 @@ rules:
           "invoice.currency": USD
           "po.currency": USD
           "request.currency": USD
+        expect:
+          outcome: HOLD_FOR_INFORMATION
+          category: OTHER_CONTROL_RISK
+      # AUD invoice against a USD PO
+      - name: fx_po_currency_mismatch
+        overrides:
+          "po.currency": USD
         expect:
           outcome: HOLD_FOR_INFORMATION
           category: OTHER_CONTROL_RISK
