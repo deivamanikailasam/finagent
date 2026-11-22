@@ -119,3 +119,83 @@ def test_input_is_not_mutated():
 def test_redaction_is_idempotent(value):
     once = redact(value)
     assert redact(once) == once
+
+
+@pytest.mark.parametrize(
+    ("text", "raw"),
+    [
+        ("| Account | 12345678 |", "12345678"),
+        ("Acc. 12345678", "12345678"),
+        ("Account #: 12345678", "12345678"),
+        ("Account-123456789", "123456789"),
+        ("account 1234​5678", "5678​"),
+        ("IBAN GB82 WEST 1234 5698 7654 32", "WEST"),
+        ("| BSB | 062-000 |", "062-000"),
+        ("BSB - 062-000", "062-000"),
+        ("BSB 062–000", "062"),
+        ("BSB 062 000", "062"),
+        ("51-824-753-556", "824"),
+        ("ABN 51 824 753 556", "824"),
+        ("123-456-782", "456"),
+        ("0491 570 156", "570"),
+        ("(0491) 570 156", "570"),
+        ("+61.491.570.156", "570"),
+        ("+61 (0) 2 5550 1234", "5550"),
+        ("tel.0491570156", "0491570156"),
+        ("Bearer:placeholderToken123", "placeholderToken123"),
+        ("Authorization: Basic dXNlcjpwYXNz", "dXNlcjpwYXNz"),
+        ("api_" + "key=" + "placeholder12345678", "placeholder12345678"),
+        ("SK-ANT-placeholder-123", "placeholder"),
+    ],
+)
+def test_common_formats_are_masked(text, raw):
+    result = redact(text)
+    assert raw not in result
+    assert redact(result) == result
+
+
+@pytest.mark.parametrize(
+    ("value", "raw"),
+    [
+        ({"ap.clerk@example.com": "x"}, "ap.clerk"),
+        ({"account": ["12345678"]}, "12345678"),
+        ({"account": Decimal("12345678")}, "12345678"),
+        ({"bank_account_number": "12345678"}, "12345678"),
+    ],
+)
+def test_keys_and_nested_sensitive_values_are_masked(value, raw):
+    assert raw not in str(redact(value))
+
+
+def test_text_without_sensitive_data_keeps_its_characters():
+    assert redact("INV‐1001") == "INV‐1001"
+
+
+def test_account_after_a_mask_is_masked_on_the_first_pass():
+    assert redact("0491570156 12345678") == f"{MASK} ****5678"
+
+
+def test_redaction_is_idempotent_on_generated_strings():
+    import random
+
+    rng = random.Random(20260915)
+    parts = [
+        "0491570156",
+        "12345678",
+        "BSB 062-000",
+        "account",
+        "ABN 51 824 753 556",
+        "9,900.00",
+        "INV-1001",
+        "123 456 782",
+        "ap.clerk@example.com",
+        "Bearer placeholderToken123",
+        "2026-09-15",
+        "|",
+        ":",
+        "40 x 150.00",
+    ]
+    for _ in range(3000):
+        text = " ".join(rng.choices(parts, k=rng.randint(1, 6)))
+        once = redact(text)
+        assert redact(once) == once, text
