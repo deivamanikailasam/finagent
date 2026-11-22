@@ -217,3 +217,10 @@ def test_quantity_rules_exempt_freight():
     by_id = {rule["id"]: rule["condition"] for rule in rules()}
     assert "non-freight" in by_id["QTY-RECEIVED"]
     assert "non-freight" in by_id["QTY-CUMULATIVE"]
+
+
+def test_unique_violation_retires_the_approved_post():
+    policy = graph()["on_duplicate_unique_violation"]
+    assert (policy["set_outcome"], policy["category"]) == ("HOLD_FOR_INFORMATION", "DUPLICATE_RISK")
+    assert policy["retire_approval"] == "INVALIDATED"
+    assert policy["new_request_required"] is True

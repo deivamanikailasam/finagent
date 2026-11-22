@@ -31,6 +31,13 @@ approve_on_blocked_invoice:
   owner: AP Operations
   block_lookup: blocks.invoice_key, from any run
   reason: a block has no release path, so a blocked invoice never posts; manual review
+on_duplicate_unique_violation:
+  applied_at: PLACE_BLOCK
+  set_outcome: HOLD_FOR_INFORMATION
+  category: DUPLICATE_RISK
+  owner: AP Operations
+  retire_approval: INVALIDATED
+  new_request_required: true
 transitions:
 - from: VALIDATE
   when: valid
