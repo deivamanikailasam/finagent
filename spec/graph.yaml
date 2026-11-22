@@ -38,6 +38,11 @@ on_duplicate_unique_violation:
   owner: AP Operations
   retire_approval: INVALIDATED
   new_request_required: true
+reconciliation:
+  lookup_before_budget_check: true
+  row_found_takes_priority_over: budget_exhausted
+  block_lookup: blocks(run_id, action = BLOCK)
+  block_row_found_calls_tool: false
 transitions:
 - from: VALIDATE
   when: valid
@@ -117,6 +122,9 @@ transitions:
 - from: SUBMIT
   when: unknown_result
   to: SUBMIT_UNKNOWN
+- from: SUBMIT
+  when: denied
+  to: FAILED
 - from: SUBMIT_UNKNOWN
   when: submit_row_found
   to: COMPLETE

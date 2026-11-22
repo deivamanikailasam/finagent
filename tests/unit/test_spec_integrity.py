@@ -224,3 +224,14 @@ def test_unique_violation_retires_the_approved_post():
     assert (policy["set_outcome"], policy["category"]) == ("HOLD_FOR_INFORMATION", "DUPLICATE_RISK")
     assert policy["retire_approval"] == "INVALIDATED"
     assert policy["new_request_required"] is True
+
+
+def test_denied_submit_has_a_safe_exit():
+    assert {"from": "SUBMIT", "when": "denied", "to": "FAILED"} in graph()["transitions"]
+
+
+def test_committed_row_is_found_before_the_budget_can_fail_the_run():
+    policy = graph()["reconciliation"]
+    assert policy["lookup_before_budget_check"] is True
+    assert policy["row_found_takes_priority_over"] == "budget_exhausted"
+    assert policy["block_row_found_calls_tool"] is False
