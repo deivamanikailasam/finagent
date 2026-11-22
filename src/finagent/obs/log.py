@@ -15,6 +15,7 @@ from finagent.config.clock import Clock, SystemClock
 from finagent.obs.redaction import redact
 
 _run_id: ContextVar[str | None] = ContextVar("finagent_run_id", default=None)
+_DROPPED_RECORD = '{"level": "ERROR", "event": "log_record_dropped"}'
 _SCALARS = (str, int, float, bool, Decimal, date, datetime, type(None))
 
 logger = logging.getLogger("finagent")
@@ -81,11 +82,22 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(redact(entry), default=str)
 
 
+class _SafeStreamHandler(logging.StreamHandler):
+    """Replaces the stdlib error report, which would print the raw message and arguments."""
+
+    def handleError(self, record: logging.LogRecord | None) -> None:  # noqa: N802
+        try:
+            self.stream.write(_DROPPED_RECORD + self.terminator)
+            self.flush()
+        except Exception:
+            pass  # logging must never break a run
+
+
 def configure_logging(
     stream: TextIO | None = None, clock: Clock | None = None, level: int = logging.INFO
 ) -> None:
     """Send JSON records to stderr by default, keeping stdout clean for CLI output."""
-    handler = logging.StreamHandler(stream or sys.stderr)
+    handler = _SafeStreamHandler(stream or sys.stderr)
     handler.setFormatter(JsonFormatter(clock or SystemClock()))
     logger.handlers.clear()
     logger.addHandler(handler)

@@ -120,3 +120,11 @@ def test_reserved_fields_cannot_be_overridden(stream):
     record = records(stream)[0]
     assert record["ts"] != "forged"
     assert record["run_id"] is None
+
+
+def test_formatting_failure_never_prints_the_raw_value(stream, capsys):
+    configure_logging(stream)  # removes pytest's capture handler, which re-raises formatting errors
+    logger.warning("bad account %d", "12345678")
+    assert records(stream)[0]["event"] == "log_record_dropped"
+    assert "12345678" not in stream.getvalue()
+    assert "12345678" not in capsys.readouterr().err
