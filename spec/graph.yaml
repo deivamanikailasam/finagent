@@ -24,12 +24,13 @@ terminal:
 - COMPLETE
 - REJECTED_BY_APPROVER
 - FAILED
-approve_on_blocked_run:
+approve_on_blocked_invoice:
   applied_at: EVALUATE
   becomes: HOLD_FOR_INFORMATION
   category: OTHER_CONTROL_RISK
   owner: AP Operations
-  reason: a block has no release path, so a blocked run never posts; manual review
+  block_lookup: blocks.invoice_key, from any run
+  reason: a block has no release path, so a blocked invoice never posts; manual review
 transitions:
 - from: VALIDATE
   when: valid

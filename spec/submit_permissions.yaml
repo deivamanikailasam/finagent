@@ -28,7 +28,7 @@ tools:
         - run_id
         - payload_hash
         - action
-        blocked_run: DENY
+        blocked_invoice: DENY
       REJECT:
         requires: HUMAN_APPROVAL
         approval_state: APPROVED
@@ -51,7 +51,7 @@ never:
   approval_state: INVALIDATED
 - tool: submit_finance_decision
   action: POST
-  run_has_block: true
+  invoice_has_block: true
 - tool: place_payment_block
   action_other_than: BLOCK
 idempotency_key:

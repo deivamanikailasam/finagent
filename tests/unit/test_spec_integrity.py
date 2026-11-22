@@ -158,11 +158,12 @@ def test_block_reconciliation_never_skips_approval():
     assert edges[("SUBMIT_UNKNOWN", "block_no_row_retry")] == "PLACE_BLOCK"
 
 
-def test_blocked_run_can_never_post():
+def test_blocked_invoice_can_never_post():
     spec = permissions()
-    assert spec["tools"]["submit_finance_decision"]["actions"]["POST"]["blocked_run"] == "DENY"
-    assert {"tool": "submit_finance_decision", "action": "POST", "run_has_block": True} in spec["never"]
-    assert graph()["approve_on_blocked_run"]["becomes"] == "HOLD_FOR_INFORMATION"
+    assert spec["tools"]["submit_finance_decision"]["actions"]["POST"]["blocked_invoice"] == "DENY"
+    assert {"tool": "submit_finance_decision", "action": "POST", "invoice_has_block": True} in spec["never"]
+    assert graph()["approve_on_blocked_invoice"]["becomes"] == "HOLD_FOR_INFORMATION"
+    assert "any run" in graph()["approve_on_blocked_invoice"]["block_lookup"]
 
 
 def test_unique_violation_is_a_reserved_block_rule_id():
