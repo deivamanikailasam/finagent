@@ -7,8 +7,13 @@ _FRONTMATTER = re.compile(r"\A---\n.*?\n---(?:\n|\Z)", re.DOTALL)
 _NEXT_SECTION = re.compile(r"^## ", re.MULTILINE)
 
 
+def document_body(text: str) -> str:
+    """Return the text with LF line endings and the frontmatter removed."""
+    return _FRONTMATTER.sub("", text.replace("\r\n", "\n").replace("\r", "\n"), count=1)
+
+
 def _section_text(text: str, n: int) -> str:
-    body = _FRONTMATTER.sub("", text.replace("\r\n", "\n").replace("\r", "\n"), count=1)
+    body = document_body(text)
     if n == 0:
         return body
     heading = re.search(rf"^## {n}\.(?:\s|$)", body, re.MULTILINE)
