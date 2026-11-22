@@ -13,6 +13,7 @@ from finagent.tools.declarations import ToolDeclaration, load_tool_declarations
 
 ROOT = Path(__file__).resolve().parents[2]
 CORPUS = ROOT / "corpus"
+EXPECTED_VECTORS = 45
 
 
 @lru_cache
@@ -58,10 +59,10 @@ def test_exactly_31_rules_with_unique_ids():
     assert len(set(ids)) == 31
 
 
-def test_exactly_44_vectors_with_unique_names():
+def test_exact_vector_count_with_unique_names():
     names = [vector["name"] for rule in rules() for vector in rule["vectors"]]
-    assert len(names) == 44
-    assert len(set(names)) == 44
+    assert len(names) == EXPECTED_VECTORS
+    assert len(set(names)) == EXPECTED_VECTORS
 
 
 def test_every_rule_has_a_vector():
@@ -85,7 +86,7 @@ def test_vectors_contain_no_float_money():
 def test_every_rule_hash_matches_the_corpus():
     for rule in rules():
         for source in [rule["source"], *rule["source"].get("additional_sections", [])]:
-            doc_id = rule["source"]["doc"]
+            doc_id = source.get("doc", rule["source"]["doc"])
             number = int(str(source["section"]).removeprefix("s"))
             assert source["section_hash"] == section_hash(corpus_text(doc_id), number), rule["id"]
 

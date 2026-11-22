@@ -69,8 +69,13 @@ rules:
       version: '3.2'
       section: s5
       section_hash: e24cbbe950c38b33585166ae515e063c623278572c38f71835c7dc33aa64b80e
+      additional_sections:
+      - doc: FIN-POL-002
+        version: '2.4'
+        section: s1
+        section_hash: 8b4eb05b619b0302e626567a5fc161477cd83c4e1ae40204e3883a059eaed54f
     template: invoice_evidence
-    condition: request vendor, amount and currency equal the invoice (interpretation)
+    condition: request vendor, amount and currency equal the invoice (interpretation); invoice gross = sum(line totals) + tax (002 s1 document total)
     threshold: null
     outcome_on_fail: HOLD_FOR_INFORMATION
     category: OTHER_CONTROL_RISK
@@ -82,6 +87,13 @@ rules:
       - name: req_amount_differs
         overrides:
           "request.amount": '9950.00'
+        expect:
+          outcome: HOLD_FOR_INFORMATION
+          category: OTHER_CONTROL_RISK
+      # stated gross 9,990.00 != lines 9,000.00 + tax 900.00 = 9,900.00
+      - name: invoice_gross_overstated
+        overrides:
+          "invoice.gross": '9990.00'
         expect:
           outcome: HOLD_FOR_INFORMATION
           category: OTHER_CONTROL_RISK
