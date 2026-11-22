@@ -1,0 +1,969 @@
+# Translated from decision log III. Money is quoted so it loads as an exact string.
+rules:
+  - id: INV-HEADER
+    source:
+      doc: FIN-POL-001
+      version: '3.2'
+      section: s2
+      section_hash: cc940ebede0e2ab3cdfeec6f571839e2dc4bf4f89307db1c2e9dd2ebd2bc0025
+    template: invoice_evidence
+    condition: legal name, number, date, currency, gross present on the invoice document
+    threshold: null
+    outcome_on_fail: REJECT_INVALID
+    category: OTHER_CONTROL_RISK
+    owner:
+      who: AP Operations
+      basis: assumption
+    vectors:
+      - name: inv_header_missing_number
+        overrides:
+          "invoice.invoice_no": null
+        expect:
+          outcome: REJECT_INVALID
+          category: OTHER_CONTROL_RISK
+  - id: INV-BILL-TO
+    source:
+      doc: FIN-POL-001
+      version: '3.2'
+      section: s2
+      section_hash: cc940ebede0e2ab3cdfeec6f571839e2dc4bf4f89307db1c2e9dd2ebd2bc0025
+    template: invoice_evidence
+    condition: bill-to is a Northstar entity (entity list not in corpus)
+    threshold: null
+    outcome_on_fail: REJECT_INVALID
+    category: OTHER_CONTROL_RISK
+    owner:
+      who: AP Operations
+      basis: assumption
+    vectors:
+      - name: inv_bill_to_not_northstar
+        overrides:
+          "invoice.bill_to_entity": Example Holdings Pty Ltd
+        expect:
+          outcome: REJECT_INVALID
+          category: OTHER_CONTROL_RISK
+  - id: REQ-AMOUNT-POSITIVE
+    source:
+      doc: FIN-POL-008
+      version: '2.1'
+      section: s1
+      section_hash: c2864a644cfa1375107c8a1986984e17a3817bc23ea283b3e825b04b92f4f1b2
+    template: invoice_evidence
+    condition: amount > 0, else input error UNSUPPORTED_DOCUMENT_TYPE (credit notes out of scope; basis assumption)
+    threshold:
+      amount_gt: '0.00'
+    outcome_on_fail: error
+    category: null
+    owner:
+      who: AP Operations
+      basis: assumption
+    vectors:
+      - name: req_amount_negative
+        overrides:
+          "request.amount": '-9900.00'
+        expect:
+          error: UNSUPPORTED_DOCUMENT_TYPE
+  - id: REQ-MATCHES-INVOICE
+    source:
+      doc: FIN-POL-001
+      version: '3.2'
+      section: s5
+      section_hash: e24cbbe950c38b33585166ae515e063c623278572c38f71835c7dc33aa64b80e
+    template: invoice_evidence
+    condition: request vendor, amount and currency equal the invoice (interpretation)
+    threshold: null
+    outcome_on_fail: HOLD_FOR_INFORMATION
+    category: OTHER_CONTROL_RISK
+    owner:
+      who: AP Operations
+      basis: assumption
+    vectors:
+      # request 9,950.00 != invoice gross 9,900.00
+      - name: req_amount_differs
+        overrides:
+          "request.amount": '9950.00'
+        expect:
+          outcome: HOLD_FOR_INFORMATION
+          category: OTHER_CONTROL_RISK
+  - id: PO-REQUIRED
+    source:
+      doc: FIN-POL-001
+      version: '3.2'
+      section: s2
+      section_hash: cc940ebede0e2ab3cdfeec6f571839e2dc4bf4f89307db1c2e9dd2ebd2bc0025
+    template: po_matching
+    condition: PO reference present; non-PO unsupported
+    threshold: null
+    outcome_on_fail: HOLD_FOR_INFORMATION
+    category: MISSING_PO
+    owner:
+      who: requester
+      basis: corpus
+    vectors:
+      - name: po_reference_missing
+        overrides:
+          "invoice.po_ref": null
+          "po": null
+        expect:
+          outcome: HOLD_FOR_INFORMATION
+          category: MISSING_PO
+  - id: PO-APPROVED
+    source:
+      doc: FIN-POL-002
+      version: '2.4'
+      section: s1
+      section_hash: 8b4eb05b619b0302e626567a5fc161477cd83c4e1ae40204e3883a059eaed54f
+    template: po_matching
+    condition: PO status APPROVED
+    threshold: null
+    outcome_on_fail: HOLD_FOR_INFORMATION
+    category: MISSING_PO
+    owner:
+      who: requester
+      basis: corpus
+    vectors:
+      - name: po_not_approved
+        overrides:
+          "po.approval_status": DRAFT
+        expect:
+          outcome: HOLD_FOR_INFORMATION
+          category: MISSING_PO
+  - id: RECEIPT-REQUIRED
+    source:
+      doc: FIN-POL-002
+      version: '2.4'
+      section: s4
+      section_hash: 7e216babd49677f9520b334e27827770d0ffac211917f8e80315e22a6ad8058f
+    template: receipt_evidence
+    condition: typed receipt per goods line; never inferred from text; freight needs none
+    threshold: null
+    outcome_on_fail: HOLD_FOR_INFORMATION
+    category: MISSING_RECEIPT
+    owner:
+      who: receipter
+      basis: corpus
+    vectors:
+      # MISSING_RECEIPT outranks the quantity findings in the tie-break
+      - name: receipt_missing
+        overrides:
+          "po.receipts": []
+        expect:
+          outcome: HOLD_FOR_INFORMATION
+          category: MISSING_RECEIPT
+  - id: SERVICE-CONFIRMED
+    source:
+      doc: FIN-POL-002
+      version: '2.4'
+      section: s2
+      section_hash: dddcb32f6c1a67632a6b8ae666ea74592f16e688c382946e7c2d84af5829baec
+    template: receipt_evidence
+    condition: service lines need service-owner confirmation
+    threshold: null
+    outcome_on_fail: HOLD_FOR_INFORMATION
+    category: MISSING_RECEIPT
+    owner:
+      who: service owner; the receipter stands in for it
+      basis: assumption
+    vectors:
+      - name: service_not_confirmed
+        overrides:
+          "po.lines[1].kind": services
+          "po.receipts[1].service_confirmed_by": null
+        expect:
+          outcome: HOLD_FOR_INFORMATION
+          category: MISSING_RECEIPT
+  - id: TYPED-RECORD-PRECEDENCE
+    source:
+      doc: FIN-POL-002
+      version: '2.4'
+      section: s1
+      section_hash: 8b4eb05b619b0302e626567a5fc161477cd83c4e1ae40204e3883a059eaed54f
+    template: receipt_evidence
+    condition: typed receipt vs internal GRN disagree => hold citing both
+    threshold: null
+    outcome_on_fail: HOLD_FOR_INFORMATION
+    category: OTHER_CONTROL_RISK
+    owner:
+      who: receipter
+      basis: assumption
+    vectors:
+      # GRN 39 != typed receipt 40
+      - name: grn_contradicts_typed_receipt
+        overrides:
+          "evidence.goods_receipt_note.lines[0].qty": 39
+        expect:
+          outcome: HOLD_FOR_INFORMATION
+          category: OTHER_CONTROL_RISK
+  - id: TOL-GOODS
+    source:
+      doc: FIN-POL-002
+      version: '2.4'
+      section: s2
+      section_hash: dddcb32f6c1a67632a6b8ae666ea74592f16e688c382946e7c2d84af5829baec
+    template: po_matching
+    condition: qty <= received AND abs(variance) <= min(50.00, 1% of PO line value), full precision; variance = (invoice unit price - PO unit price) x invoiced qty (interpretation, also for partial invoicing)
+    threshold:
+      absolute: '50.00'
+      percent_of_po_line: '1'
+    outcome_on_fail: HOLD_FOR_INFORMATION
+    category: PRICE_VARIANCE
+    owner:
+      who: requester
+      basis: assumption
+    vectors:
+      # limit min(50.00, 1% x 3,000.00) = 30.00; variance 3,030.00 - 3,000.00 = 30.00 <= 30.00
+      - name: tol_goods_at_limit
+        overrides:
+          "po.lines[1].qty": 1
+          "po.lines[1].unit_price": '3000.00'
+          "po.lines[1].line_value": '3000.00'
+          "invoice.lines[1].qty": 1
+          "invoice.lines[1].unit_price": '3030.00'
+          "po.receipts[1].qty": 1
+          "evidence.goods_receipt_note.lines[1].qty": 1
+        expect:
+          outcome: APPROVE_FOR_POSTING
+      # limit 30.00; variance 3,030.01 - 3,000.00 = 30.01 > 30.00
+      - name: tol_goods_over_limit
+        overrides:
+          "po.lines[1].qty": 1
+          "po.lines[1].unit_price": '3000.00'
+          "po.lines[1].line_value": '3000.00'
+          "invoice.lines[1].qty": 1
+          "invoice.lines[1].unit_price": '3030.01'
+          "po.receipts[1].qty": 1
+          "evidence.goods_receipt_note.lines[1].qty": 1
+        expect:
+          outcome: HOLD_FOR_INFORMATION
+          category: PRICE_VARIANCE
+  - id: TOL-SERVICES
+    source:
+      doc: FIN-POL-002
+      version: '2.4'
+      section: s2
+      section_hash: dddcb32f6c1a67632a6b8ae666ea74592f16e688c382946e7c2d84af5829baec
+    template: po_matching
+    condition: abs(variance) <= min(100.00, 2% of PO line value) + confirmation
+    threshold:
+      absolute: '100.00'
+      percent_of_po_line: '2'
+    outcome_on_fail: HOLD_FOR_INFORMATION
+    category: PRICE_VARIANCE
+    owner:
+      who: requester
+      basis: assumption
+    vectors:
+      # limit min(100.00, 2% x 3,000.00) = 60.00; variance 60.00 <= 60.00
+      - name: tol_services_at_limit
+        overrides:
+          "po.lines[1].qty": 1
+          "po.lines[1].unit_price": '3000.00'
+          "po.lines[1].line_value": '3000.00'
+          "invoice.lines[1].qty": 1
+          "invoice.lines[1].unit_price": '3060.00'
+          "po.receipts[1].qty": 1
+          "evidence.goods_receipt_note.lines[1].qty": 1
+          "po.lines[1].kind": services
+          "po.receipts[1].service_confirmed_by": rcv-01
+        expect:
+          outcome: APPROVE_FOR_POSTING
+      # limit 60.00; variance 60.01 > 60.00
+      - name: tol_services_over_limit
+        overrides:
+          "po.lines[1].qty": 1
+          "po.lines[1].unit_price": '3000.00'
+          "po.lines[1].line_value": '3000.00'
+          "invoice.lines[1].qty": 1
+          "invoice.lines[1].unit_price": '3060.01'
+          "po.receipts[1].qty": 1
+          "evidence.goods_receipt_note.lines[1].qty": 1
+          "po.lines[1].kind": services
+          "po.receipts[1].service_confirmed_by": rcv-01
+        expect:
+          outcome: HOLD_FOR_INFORMATION
+          category: PRICE_VARIANCE
+  - id: TOL-FREIGHT
+    source:
+      doc: FIN-POL-002
+      version: '2.4'
+      section: s2
+      section_hash: dddcb32f6c1a67632a6b8ae666ea74592f16e688c382946e7c2d84af5829baec
+    template: po_matching
+    condition: freight variance <= 75.00 only if PO permits freight
+    threshold:
+      absolute: '75.00'
+      requires: po.freight_permitted
+    outcome_on_fail: HOLD_FOR_INFORMATION
+    category: PRICE_VARIANCE
+    owner:
+      who: requester
+      basis: assumption
+    vectors:
+      # 85.00 - 10.00 = 75.00 <= 75.00, permitted; gross (6,000 + 3,000 + 85) x 1.1 = 9,993.50
+      - name: tol_freight_at_limit_permitted
+        overrides:
+          "po.lines[2]":
+            po_line_ref: PO-L3
+            kind: freight
+            qty: 1
+            unit_price: '10.00'
+            line_value: '10.00'
+            qty_invoiced_to_date: 0
+          "invoice.lines[2]":
+            line_id: L3
+            po_line_ref: PO-L3
+            description_id: DESC-FREIGHT
+            qty: 1
+            unit_price: '85.00'
+            tax_code: GST
+            line_total: '85.00'
+          "po.totals.excl_tax": '9010.00'
+          "po.freight_permitted": true
+        expect:
+          outcome: APPROVE_FOR_POSTING
+      # variance 75.00 but the PO does not permit freight
+      - name: tol_freight_not_permitted
+        overrides:
+          "po.lines[2]":
+            po_line_ref: PO-L3
+            kind: freight
+            qty: 1
+            unit_price: '10.00'
+            line_value: '10.00'
+            qty_invoiced_to_date: 0
+          "invoice.lines[2]":
+            line_id: L3
+            po_line_ref: PO-L3
+            description_id: DESC-FREIGHT
+            qty: 1
+            unit_price: '85.00'
+            tax_code: GST
+            line_total: '85.00'
+          "po.totals.excl_tax": '9010.00'
+        expect:
+          outcome: HOLD_FOR_INFORMATION
+          category: PRICE_VARIANCE
+  - id: QTY-RECEIVED
+    source:
+      doc: FIN-POL-002
+      version: '2.4'
+      section: s2
+      section_hash: dddcb32f6c1a67632a6b8ae666ea74592f16e688c382946e7c2d84af5829baec
+    template: po_matching
+    condition: invoiced qty <= received qty
+    threshold: null
+    outcome_on_fail: HOLD_FOR_INFORMATION
+    category: QUANTITY_VARIANCE
+    owner:
+      who: receipter
+      basis: FIN-POL-007 s3 allows requester or receipter; choice mine
+    vectors:
+      # invoiced 41 > received 40; QUANTITY_VARIANCE outranks PRICE_VARIANCE
+      - name: qty_exceeds_received
+        overrides:
+          "invoice.lines[0].qty": 41
+        expect:
+          outcome: HOLD_FOR_INFORMATION
+          category: QUANTITY_VARIANCE
+  - id: QTY-CUMULATIVE
+    source:
+      doc: FIN-POL-002
+      version: '2.4'
+      section: s3
+      section_hash: ae657b296aee402a6ef06b6716eb573af1faea417e00a02b37925ed919a8c70c
+    template: po_matching
+    condition: invoiced-to-date + this <= received (no splitting)
+    threshold: null
+    outcome_on_fail: HOLD_FOR_INFORMATION
+    category: QUANTITY_VARIANCE
+    owner:
+      who: requester
+      basis: assumption
+    vectors:
+      # 1 invoiced to date + 40 = 41 > received 40
+      - name: qty_cumulative_exceeds_received
+        overrides:
+          "po.lines[0].qty_invoiced_to_date": 1
+        expect:
+          outcome: HOLD_FOR_INFORMATION
+          category: QUANTITY_VARIANCE
+  - id: LINE-MAPPED
+    source:
+      doc: FIN-POL-002
+      version: '2.4'
+      section: s1
+      section_hash: 8b4eb05b619b0302e626567a5fc161477cd83c4e1ae40204e3883a059eaed54f
+    template: po_matching
+    condition: every line maps to exactly one approved PO line
+    threshold: null
+    outcome_on_fail: HOLD_FOR_INFORMATION
+    category: QUANTITY_VARIANCE
+    owner:
+      who: requester
+      basis: assumption
+    vectors:
+      # PO-L9 is not on the PO; a typed receipt is supplied so MISSING_RECEIPT does not win the tie-break
+      - name: line_not_mapped
+        overrides:
+          "invoice.lines[2]":
+            line_id: L3
+            po_line_ref: PO-L9
+            description_id: DESC-UNMAPPED
+            qty: 1
+            unit_price: '10.00'
+            tax_code: GST
+            line_total: '10.00'
+          "po.receipts[2]":
+            po_line_ref: PO-L9
+            receipter: rcv-01
+            qty: 1
+            date: '2026-08-28'
+            service_confirmed_by: null
+        expect:
+          outcome: HOLD_FOR_INFORMATION
+          category: QUANTITY_VARIANCE
+  - id: TAX-CHECK
+    source:
+      doc: FIN-POL-002
+      version: '2.4'
+      section: s2
+      section_hash: dddcb32f6c1a67632a6b8ae666ea74592f16e688c382946e7c2d84af5829baec
+    template: po_matching
+    condition: 'tax = sum(line x rate) within a separate 0.01 rounding allowance (0.01: assumption); a missing tax amount also fails here (001 s2 ''where applicable''; INV-HEADER does not check it)'
+    threshold:
+      rounding_allowance: '0.01'
+    outcome_on_fail: HOLD_FOR_INFORMATION
+    category: TAX_QUERY
+    owner:
+      who: AP Operations
+      basis: assumption
+    vectors:
+      # abs(900.01 - 900.00) = 0.01 <= 0.01
+      - name: tax_within_rounding
+        overrides:
+          "invoice.tax": '900.01'
+        expect:
+          outcome: APPROVE_FOR_POSTING
+      # abs(905.00 - 900.00) = 5.00 > 0.01
+      - name: tax_mismatch
+        overrides:
+          "invoice.tax": '905.00'
+        expect:
+          outcome: HOLD_FOR_INFORMATION
+          category: TAX_QUERY
+  - id: NEGATIVE-LINE
+    source:
+      doc: FIN-POL-008
+      version: '2.1'
+      section: s1
+      section_hash: c2864a644cfa1375107c8a1986984e17a3817bc23ea283b3e825b04b92f4f1b2
+    template: invoice_evidence
+    condition: no negative lines; excluded from tolerance and quantity checks
+    threshold: null
+    outcome_on_fail: HOLD_FOR_INFORMATION
+    category: OTHER_CONTROL_RISK
+    owner:
+      who: AP Operations
+      basis: assumption
+    vectors:
+      # 100 x -30.00 = -3,000.00; the mapped line is excluded from tolerance and quantity checks
+      - name: negative_line
+        overrides:
+          "invoice.lines[1].unit_price": '-30.00'
+        expect:
+          outcome: HOLD_FOR_INFORMATION
+          category: OTHER_CONTROL_RISK
+  - id: DUP-EXACT-PAID
+    source:
+      doc: FIN-POL-005
+      version: '2.8'
+      section: s2
+      section_hash: 26c6fdb1f2c5e5df7ee1ee55861fd2544bdb2fe14ac63283c82423f81b414999
+    template: duplicate_policy
+    condition: exact (vendor, normalised no., currency, gross) vs PAID/POSTED
+    threshold: null
+    outcome_on_fail: REJECT_DUPLICATE
+    category: DUPLICATE_RISK
+    owner:
+      who: AP Operations
+      basis: assumption
+    vectors:
+      - name: dup_exact_paid
+        overrides:
+          "history[0]":
+            record_id: H-0001
+            status: PAID
+            vendor_id: V-100
+            invoice_no_norm: inv1001
+            currency: AUD
+            gross: '9900.00'
+            invoice_date: '2026-09-01'
+            fingerprint: null
+            po_number: PO-4471
+            attachment_hash: null
+            originating_run: null
+            prior_outcome: null
+            hold_category: null
+        expect:
+          outcome: REJECT_DUPLICATE
+          category: DUPLICATE_RISK
+  - id: DUP-EXACT-HELD
+    source:
+      doc: FIN-POL-005
+      version: '2.8'
+      section: s1
+      section_hash: 637d0d6ce4494f83f196447c1f6fc5fb46c0a4fd4eedaa9d1a0f6c89b77a8037
+    template: duplicate_policy
+    condition: exact vs HELD
+    threshold: null
+    outcome_on_fail: HOLD_FOR_INFORMATION
+    category: DUPLICATE_RISK
+    owner:
+      who: AP Operations
+      basis: assumption
+    vectors:
+      - name: dup_exact_held
+        overrides:
+          "history[0]":
+            record_id: H-0001
+            status: HELD
+            vendor_id: V-100
+            invoice_no_norm: inv1001
+            currency: AUD
+            gross: '9900.00'
+            invoice_date: '2026-09-01'
+            fingerprint: null
+            po_number: PO-4471
+            attachment_hash: null
+            originating_run: null
+            prior_outcome: HOLD_FOR_INFORMATION
+            hold_category: PRICE_VARIANCE
+        expect:
+          outcome: HOLD_FOR_INFORMATION
+          category: DUPLICATE_RISK
+  - id: DUP-PRIOR-REJECTED
+    source:
+      doc: FIN-POL-005
+      version: '2.8'
+      section: s2
+      section_hash: 26c6fdb1f2c5e5df7ee1ee55861fd2544bdb2fe14ac63283c82423f81b414999
+    template: duplicate_policy
+    condition: exact vs REJECTED => review, not auto-reject
+    threshold: null
+    outcome_on_fail: HOLD_FOR_INFORMATION
+    category: DUPLICATE_RISK
+    owner:
+      who: AP Operations
+      basis: assumption
+    vectors:
+      - name: dup_prior_rejected
+        overrides:
+          "history[0]":
+            record_id: H-0001
+            status: REJECTED
+            vendor_id: V-100
+            invoice_no_norm: inv1001
+            currency: AUD
+            gross: '9900.00'
+            invoice_date: '2026-09-01'
+            fingerprint: null
+            po_number: PO-4471
+            attachment_hash: null
+            originating_run: null
+            prior_outcome: REJECT_INVALID
+            hold_category: null
+        expect:
+          outcome: HOLD_FOR_INFORMATION
+          category: DUPLICATE_RISK
+  - id: DUP-PROBABLE
+    source:
+      doc: FIN-POL-005
+      version: '2.8'
+      section: s1
+      section_hash: 637d0d6ce4494f83f196447c1f6fc5fb46c0a4fd4eedaa9d1a0f6c89b77a8037
+    template: duplicate_policy
+    condition: 'same vendor AND (stripped no. equal OR (amount variance < 0.5% of prior gross AND date within 14 calendar days) OR same attachment hash); thresholds corpus, combination mine; PO number recorded as corroborating evidence, never a trigger. Vector note: the 0.20% / 0.61% boundary pair uses a different invoice number, so it tests arm (b)'
+    threshold:
+      amount_variance_percent_lt: '0.5'
+      date_within_calendar_days: 14
+    outcome_on_fail: HOLD_FOR_INFORMATION
+    category: DUPLICATE_RISK
+    owner:
+      who: AP Operations
+      basis: assumption
+    vectors:
+      # (9,900 - 9,880) / 9,880 = 0.2024% < 0.5%; 7 days apart
+      - name: dup_probable_0_20_percent
+        overrides:
+          "history[0]":
+            record_id: H-0001
+            status: PAID
+            vendor_id: V-100
+            invoice_no_norm: inv1009
+            currency: AUD
+            gross: '9880.00'
+            invoice_date: '2026-08-25'
+            fingerprint: null
+            po_number: PO-4471
+            attachment_hash: null
+            originating_run: null
+            prior_outcome: null
+            hold_category: null
+        expect:
+          outcome: HOLD_FOR_INFORMATION
+          category: DUPLICATE_RISK
+      # (9,900 - 9,840) / 9,840 = 0.6098% >= 0.5%; same PO alone is not a trigger
+      - name: dup_not_probable_0_61_percent
+        overrides:
+          "history[0]":
+            record_id: H-0001
+            status: PAID
+            vendor_id: V-100
+            invoice_no_norm: inv1009
+            currency: AUD
+            gross: '9840.00'
+            invoice_date: '2026-08-25'
+            fingerprint: null
+            po_number: PO-4471
+            attachment_hash: null
+            originating_run: null
+            prior_outcome: null
+            hold_category: null
+        expect:
+          outcome: APPROVE_FOR_POSTING
+  - id: VENDOR-STATUS
+    source:
+      doc: FIN-POL-004
+      version: '5.1'
+      section: s4
+      section_hash: 778a60c73180c65378d18f72a729946759068044d4290a1fd785e82dbbaf951a
+    template: vendor_status
+    condition: BLOCKED, DORMANT, SANCTIONS_REVIEW, PENDING_VERIFICATION => hold
+    threshold: null
+    outcome_on_fail: HOLD_FOR_INFORMATION
+    category: VENDOR_BLOCK
+    owner:
+      who: Vendor Governance
+      basis: corpus
+    vectors:
+      - name: vendor_blocked
+        overrides:
+          "vendor.status": BLOCKED
+        expect:
+          outcome: HOLD_FOR_INFORMATION
+          category: VENDOR_BLOCK
+      - name: vendor_dormant
+        overrides:
+          "vendor.status": DORMANT
+        expect:
+          outcome: HOLD_FOR_INFORMATION
+          category: VENDOR_BLOCK
+      - name: vendor_sanctions_review
+        overrides:
+          "vendor.status": SANCTIONS_REVIEW
+        expect:
+          outcome: HOLD_FOR_INFORMATION
+          category: VENDOR_BLOCK
+      - name: vendor_pending_verification
+        overrides:
+          "vendor.status": PENDING_VERIFICATION
+        expect:
+          outcome: HOLD_FOR_INFORMATION
+          category: VENDOR_BLOCK
+  - id: BANK-CHANGE-HOLD
+    source:
+      doc: FIN-POL-004
+      version: '5.1'
+      section: s2
+      section_hash: 12b4e74cc973ae40d6278286540478b91652246f016c5624acf0450a3f506aab
+    template: bank_change
+    condition: bank change within 2 business days (+1 margin)
+    threshold:
+      business_days: 2
+      margin_business_days: 1
+    outcome_on_fail: HOLD_FOR_INFORMATION
+    category: BANK_CHANGE
+    owner:
+      who: Vendor Governance
+      basis: corpus
+    vectors:
+      # Thu 09-10 + 3 business days = Tue 09-15 >= as_of 09-15; BANK_CHANGE outranks AUTHORITY_GAP
+      - name: bank_change_inside_window
+        overrides:
+          "vendor.bank_changed_at": '2026-09-10T09:00:00+10:00'
+        expect:
+          outcome: HOLD_FOR_INFORMATION
+          category: BANK_CHANGE
+  - id: REMIT-MATCHES-MASTER
+    source:
+      doc: FIN-POL-001
+      version: '3.2'
+      section: s5
+      section_hash: e24cbbe950c38b33585166ae515e063c623278572c38f71835c7dc33aa64b80e
+    template: bank_change
+    condition: invoice remit-to fingerprint = vendor master
+    threshold: null
+    outcome_on_fail: HOLD_FOR_INFORMATION
+    category: BANK_CHANGE
+    owner:
+      who: Vendor Governance
+      basis: corpus
+    vectors:
+      # one structural indicator only, so no escalation
+      - name: remit_mismatch
+        overrides:
+          "invoice.remit_to.fingerprint": ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+          "invoice.remit_to.last4": '8842'
+        expect:
+          outcome: HOLD_FOR_INFORMATION
+          category: BANK_CHANGE
+  - id: FIRST-PAYMENT-AFTER-BANK-CHANGE
+    source:
+      doc: FIN-POL-004
+      version: '5.1'
+      section: s2
+      section_hash: 12b4e74cc973ae40d6278286540478b91652246f016c5624acf0450a3f506aab
+    template: bank_change
+    condition: bank_changed_at > last_paid_at => needs FC co-approval (not modelled)
+    threshold: null
+    outcome_on_fail: HOLD_FOR_INFORMATION
+    category: AUTHORITY_GAP
+    owner:
+      who: Financial Control
+      basis: corpus
+    vectors:
+      # Wed 09-09 + 3 business days = Mon 09-14 < as_of, so outside the hold; changed after last paid 08-03
+      - name: first_payment_after_bank_change
+        overrides:
+          "vendor.bank_changed_at": '2026-09-09T09:00:00+10:00'
+        expect:
+          outcome: HOLD_FOR_INFORMATION
+          category: AUTHORITY_GAP
+  - id: DFA-TIER
+    source:
+      doc: FIN-POL-003
+      version: '4.0'
+      section: s2
+      section_hash: 04b37cf95ba0624a6c5ab05ef377a11187613906889eea982f13fcb73b58ee7a
+    template: dfa_tier
+    condition: 'computes the required role: lowest role with limit >= commitment = max(invoice gross, PO total incl. tax); limits inclusive; fails only if no register entry has limit >= commitment'
+    threshold:
+      Cost Centre Manager: '10000.00'
+      Department Director: '50000.00'
+      Executive Director: '250000.00'
+      Chief Financial Officer: '1000000.00'
+    outcome_on_fail: HOLD_FOR_INFORMATION
+    category: AUTHORITY_GAP
+    owner:
+      who: Financial Control
+      basis: corpus
+    vectors:
+      # 6,000 + 600 GST + 3,400.00 FRE = 10,000.00 <= 10,000.00
+      - name: dfa_ccm_at_limit
+        overrides:
+          "po.lines[1].qty": 1
+          "po.lines[1].unit_price": '3400.00'
+          "po.lines[1].line_value": '3400.00'
+          "invoice.lines[1].qty": 1
+          "invoice.lines[1].unit_price": '3400.00'
+          "po.receipts[1].qty": 1
+          "evidence.goods_receipt_note.lines[1].qty": 1
+          "po.totals.excl_tax": '9400.00'
+          "invoice.lines[1].tax_code": FRE
+        expect:
+          outcome: APPROVE_FOR_POSTING
+          dfa_role: Cost Centre Manager
+      # 6,600 + 3,400.01 = 10,000.01 > 10,000.00
+      - name: dfa_dd_above_ccm
+        overrides:
+          "po.lines[1].qty": 1
+          "po.lines[1].unit_price": '3400.01'
+          "po.lines[1].line_value": '3400.01'
+          "invoice.lines[1].qty": 1
+          "invoice.lines[1].unit_price": '3400.01'
+          "po.receipts[1].qty": 1
+          "evidence.goods_receipt_note.lines[1].qty": 1
+          "po.totals.excl_tax": '9400.01'
+          "invoice.lines[1].tax_code": FRE
+        expect:
+          outcome: APPROVE_FOR_POSTING
+          dfa_role: Department Director
+      # 6,600 + 43,400.01 = 50,000.01 > highest fixture register limit 50,000.00
+      - name: dfa_no_register_entry
+        overrides:
+          "po.lines[1].qty": 1
+          "po.lines[1].unit_price": '43400.01'
+          "po.lines[1].line_value": '43400.01'
+          "invoice.lines[1].qty": 1
+          "invoice.lines[1].unit_price": '43400.01'
+          "po.receipts[1].qty": 1
+          "evidence.goods_receipt_note.lines[1].qty": 1
+          "po.totals.excl_tax": '49400.01'
+          "invoice.lines[1].tax_code": FRE
+        expect:
+          outcome: HOLD_FOR_INFORMATION
+          category: AUTHORITY_GAP
+  - id: DFA-AUTHORITATIVE-SOURCE
+    source:
+      doc: FIN-POL-003
+      version: '4.0'
+      section: s2
+      section_hash: 04b37cf95ba0624a6c5ab05ef377a11187613906889eea982f13fcb73b58ee7a
+    template: dfa_tier
+    condition: an authoritative DFA effective at as_of; v1.0 never used
+    threshold: null
+    outcome_on_fail: HOLD_FOR_INFORMATION
+    category: AUTHORITY_GAP
+    owner:
+      who: Financial Control
+      basis: corpus
+    vectors:
+      # as_of 2026-07-31 < FIN-POL-003 v4.0 effective 2026-08-01
+      - name: dfa_before_effective_date
+        overrides:
+          "as_of": '2026-07-31T09:00:00+10:00'
+        expect:
+          outcome: HOLD_FOR_INFORMATION
+          category: AUTHORITY_GAP
+  - id: HIGH-RISK
+    source:
+      doc: FIN-POL-003
+      version: '4.0'
+      section: s3
+      section_hash: e6c039843330c2fa5c9fdc0616773ef26e3654bbd9ac918102bbc687a46a5057
+    template: high_risk
+    condition: 'vendor < 30 days, changed bank (bank_changed_at set and no payment since, i.e. bank_changed_at > last_paid_at or last_paid_at null: interpretation), overseas account, manual payment, fraud flag => dual approval not modelled'
+    threshold:
+      vendor_age_days_lt: 30
+    outcome_on_fail: HOLD_FOR_INFORMATION
+    category: AUTHORITY_GAP
+    owner:
+      who: Financial Control
+      basis: corpus
+    vectors:
+      # 2026-08-17 to 2026-09-15 = 29 days < 30
+      - name: vendor_29_days_old
+        overrides:
+          "vendor.created_at": '2026-08-17T09:00:00+10:00'
+          "vendor.last_paid_at": null
+        expect:
+          outcome: HOLD_FOR_INFORMATION
+          category: AUTHORITY_GAP
+      # 2026-08-16 to 2026-09-15 = 30 days, not < 30
+      - name: vendor_30_days_old
+        overrides:
+          "vendor.created_at": '2026-08-16T09:00:00+10:00'
+          "vendor.last_paid_at": null
+        expect:
+          outcome: APPROVE_FOR_POSTING
+  - id: SOD-ABOVE-25K
+    source:
+      doc: FIN-POL-001
+      version: '3.2'
+      section: s4
+      section_hash: 50fcffdc23f22ccc3ab0960b414857d906c6f05c1b2d9256cd05b4d727607d9d
+    template: segregation
+    condition: amount strictly > 25,000.00 and requester = receipter
+    threshold:
+      amount_gt: '25000.00'
+    outcome_on_fail: ESCALATE_CONTROL_REVIEW
+    category: AUTHORITY_GAP
+    owner:
+      who: Financial Control
+      basis: corpus
+    vectors:
+      # 6,600 + 18,400.00 = 25,000.00, not > 25,000.00
+      - name: sod_at_limit
+        overrides:
+          "po.lines[1].qty": 1
+          "po.lines[1].unit_price": '18400.00'
+          "po.lines[1].line_value": '18400.00'
+          "invoice.lines[1].qty": 1
+          "invoice.lines[1].unit_price": '18400.00'
+          "po.receipts[1].qty": 1
+          "evidence.goods_receipt_note.lines[1].qty": 1
+          "po.totals.excl_tax": '24400.00'
+          "invoice.lines[1].tax_code": FRE
+          "po.requester": req-01
+          "po.receipts[0].receipter": req-01
+          "po.receipts[1].receipter": req-01
+        expect:
+          outcome: APPROVE_FOR_POSTING
+          dfa_role: Department Director
+      # 6,600 + 18,400.01 = 25,000.01 > 25,000.00
+      - name: sod_above_limit
+        overrides:
+          "po.lines[1].qty": 1
+          "po.lines[1].unit_price": '18400.01'
+          "po.lines[1].line_value": '18400.01'
+          "invoice.lines[1].qty": 1
+          "invoice.lines[1].unit_price": '18400.01'
+          "po.receipts[1].qty": 1
+          "evidence.goods_receipt_note.lines[1].qty": 1
+          "po.totals.excl_tax": '24400.01'
+          "invoice.lines[1].tax_code": FRE
+          "po.requester": req-01
+          "po.receipts[0].receipter": req-01
+          "po.receipts[1].receipter": req-01
+        expect:
+          outcome: ESCALATE_CONTROL_REVIEW
+          category: AUTHORITY_GAP
+  - id: FX-HOLD
+    source:
+      doc: FIN-POL-009
+      version: '1.6'
+      section: s3
+      section_hash: 986e61fe4ca62a035165fe530c63b9d3a7fb385992e47af66f495c1ade00cd1a
+    template: fx
+    condition: non-AUD held; DFA not evaluated (AUD amount unknown)
+    threshold: null
+    outcome_on_fail: HOLD_FOR_INFORMATION
+    category: OTHER_CONTROL_RISK
+    owner:
+      who: Treasury
+      basis: assumption; 009 s1 covers a currency mismatch only
+    vectors:
+      - name: fx_usd
+        overrides:
+          "invoice.currency": USD
+          "po.currency": USD
+          "request.currency": USD
+        expect:
+          outcome: HOLD_FOR_INFORMATION
+          category: OTHER_CONTROL_RISK
+  - id: FRAUD-INDICATORS
+    source:
+      doc: FIN-POL-005
+      version: '2.8'
+      section: s3
+      section_hash: 30772a7dc5438194395d76928faddd974c6f067e518f285cf48d66f2d5b11202
+      additional_sections:
+      - section: s4
+        section_hash: 3b955f329302f1df2f0c35fc3bef97c593616f55888d3751f0568b3d639dbb1c
+    template: fraud_indicators
+    condition: '>= 2 distinct indicators => escalate; exactly 1 recorded only; category BANK_CHANGE if a bank indicator is present, else OTHER_CONTROL_RISK'
+    threshold:
+      escalate_at_distinct_indicators: 2
+    outcome_on_fail: ESCALATE_CONTROL_REVIEW
+    category:
+      if_bank_indicator: BANK_CHANGE
+      otherwise: OTHER_CONTROL_RISK
+    owner:
+      who: Financial Crime and Controls
+      basis: corpus
+    vectors:
+      # remit mismatch + urgent language = 2 distinct indicators
+      - name: fraud_two_indicators
+        overrides:
+          "invoice.remit_to.fingerprint": ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+          "invoice.remit_to.last4": '8842'
+          "request.notes": Please process this urgently.
+        expect:
+          outcome: ESCALATE_CONTROL_REVIEW
+          category: BANK_CHANGE
+      # urgent language only = 1 indicator, recorded
+      - name: fraud_one_indicator
+        overrides:
+          "request.notes": Please process this urgently.
+        expect:
+          outcome: APPROVE_FOR_POSTING

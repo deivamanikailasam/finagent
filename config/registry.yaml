@@ -1,0 +1,162 @@
+# Decision log II. Frontmatter never confers trust; unregistered or changed files are EXTERNAL_UNVERIFIED.
+documents:
+- doc_id: FIN-POL-001
+  file: 01_accounts_payable_core_policy.md
+  version: '3.2'
+  trust_class: AUTHORITATIVE
+  effective: '2026-07-01'
+  superseded: null
+  acl:
+  - agent
+  - approver
+  - read_only
+  sha256: c09fcfa093fab313d2ff810d67fcd864982486284098fba25fdba81601a73ed1
+- doc_id: FIN-POL-002
+  file: 02_three_way_matching_and_tolerances.md
+  version: '2.4'
+  trust_class: AUTHORITATIVE
+  effective: '2026-04-01'
+  superseded: null
+  acl:
+  - agent
+  - approver
+  - read_only
+  sha256: 5a11f2f27f297debfdfb2cf8a27b05f961931bb34edf6999c27414261f9c0ac4
+- doc_id: FIN-POL-003
+  file: 03_delegated_financial_authority.md
+  version: '4.0'
+  trust_class: AUTHORITATIVE
+  effective: '2026-08-01'
+  superseded: null
+  acl:
+  - agent
+  - approver
+  - read_only
+  sha256: 85ad1a0016ab4c368965fca70c049f8dd90fd68c676b89a1de7145719ea24f90
+- doc_id: FIN-POL-004
+  file: 04_vendor_onboarding_and_bank_changes.md
+  version: '5.1'
+  trust_class: AUTHORITATIVE
+  effective: '2026-05-15'
+  superseded: null
+  acl:
+  - agent
+  - approver_financial_control
+  sha256: 92e90df6e82b94891292c4e8a1a2a303c385f0460a1758a414c963425271e614
+  restricted: true
+  audit_event: restricted_access
+- doc_id: FIN-POL-005
+  file: 05_duplicate_invoice_and_fraud_controls.md
+  version: '2.8'
+  trust_class: AUTHORITATIVE
+  effective: '2026-03-01'
+  superseded: null
+  acl:
+  - agent
+  - approver
+  - read_only
+  sha256: 2f27183574fbb443f994616afd235aec2d38031bdd942cd99af75d2da4bfc919
+- doc_id: FIN-POL-006
+  file: 06_payment_terms_and_payment_runs.md
+  version: '3.0'
+  trust_class: AUTHORITATIVE
+  effective: '2026-01-01'
+  superseded: null
+  acl:
+  - agent
+  - approver
+  - read_only
+  sha256: 49fa06b2098d2b68b39ce49bcaa0e2c57b5f9a057a018b84cbad852c0eeb387f
+- doc_id: FIN-POL-007
+  file: 07_invoice_exceptions_and_escalations.md
+  version: '1.9'
+  trust_class: AUTHORITATIVE
+  effective: '2026-06-01'
+  superseded: null
+  acl:
+  - agent
+  - approver
+  - read_only
+  sha256: 3fd36f8938d25478c323e5b34c5529a56a36da9199c1e87ca54b8edb434f8aa0
+- doc_id: FIN-POL-008
+  file: 08_credit_notes_refunds_and_overpayments.md
+  version: '2.1'
+  trust_class: AUTHORITATIVE
+  effective: '2026-02-15'
+  superseded: null
+  acl:
+  - agent
+  - approver
+  - read_only
+  sha256: c76f339f7ac15d376ed4b01afe295b02ca7dc05c0a2c912d2c8fca6b88aedd73
+- doc_id: FIN-POL-009
+  file: 09_foreign_currency_invoices.md
+  version: '1.6'
+  trust_class: AUTHORITATIVE
+  effective: '2026-07-15'
+  superseded: null
+  acl:
+  - agent
+  - approver
+  - read_only
+  sha256: 3b594c2df7ab87f3bf937bdd7fca423f1ccc208f1c56c947c7a8f5bbb5306150
+- doc_id: FIN-POL-010
+  file: 10_financial_records_retention_and_privacy.md
+  version: '4.3'
+  trust_class: AUTHORITATIVE
+  effective: '2026-01-01'
+  superseded: null
+  acl:
+  - agent
+  - approver
+  - read_only
+  sha256: b47e63531e789cffe166dd8685a26a58a3219d223641ead1a6c46abe852a85b3
+- doc_id: FIN-POL-011
+  file: 11_month_end_close_and_accruals.md
+  version: '2.7'
+  trust_class: AUTHORITATIVE
+  effective: '2026-06-30'
+  superseded: null
+  acl:
+  - agent
+  - approver
+  - read_only
+  sha256: 8577d3a1836bdcb336bc2efeac22d2aa2bfa0505a74201a7632437a8b8798ad6
+- doc_id: FIN-POL-012
+  file: 12_emergency_and_non_po_purchases.md
+  version: '3.5'
+  trust_class: AUTHORITATIVE
+  effective: '2026-05-01'
+  superseded: null
+  acl:
+  - agent
+  - approver
+  - read_only
+  sha256: d99cbe91d66fe345fc6623931b2b9216a672a9236b22107d7ea755150d086059
+- doc_id: FIN-POL-003-OLD
+  file: delegated_financial_authority_v1.md
+  version: '1.0'
+  trust_class: SUPERSEDED
+  effective: '2023-01-01'
+  superseded: '2026-08-01'
+  acl:
+  - all
+  sha256: a45e84d5ca8b9e1044ffda3d77e9e341d71089a8e4be898aef0d2ddbabb02ef6
+- doc_id: ADV-001
+  file: supplier_payment_instructions.md
+  version: '1.0'
+  trust_class: EXTERNAL_UNVERIFIED
+  effective: null
+  superseded: null
+  acl:
+  - all
+  sha256: d6594ceeb25f6af5936bbc7b4b4ebb94e4cfd61f4ce56f85eb7e12bc08fc8278
+- doc_id: ADV-002
+  file: travel_policy_extract.md
+  version: '7.0'
+  trust_class: OUT_OF_SCOPE
+  effective: null
+  superseded: null
+  acl:
+  - all
+  sha256: 4448ed6eb1bbf19dbef655fe017a2db1488ae7c20d75c90b604a89b85513672c

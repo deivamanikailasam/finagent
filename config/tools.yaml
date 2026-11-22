@@ -1,0 +1,72 @@
+# Decision log VII.
+tools:
+- name: get_invoice_document
+  purpose: Fetch the invoice document for a case
+  access: read
+  timeout_s: 2.0
+  max_attempts: 3
+  retry_on: &id001
+  - timeout
+  - connection_error
+  - http_5xx
+  - http_429
+  impl: mock
+- name: get_vendor_record
+  purpose: Fetch the vendor master record
+  access: read
+  timeout_s: 2.0
+  max_attempts: 3
+  retry_on: *id001
+  impl: mock
+- name: get_purchase_order
+  purpose: Fetch the purchase order and typed receipts
+  access: read
+  timeout_s: 2.0
+  max_attempts: 3
+  retry_on: *id001
+  impl: mock
+- name: get_authority_record
+  purpose: Fetch the authority register
+  access: read
+  timeout_s: 2.0
+  max_attempts: 3
+  retry_on: *id001
+  impl: mock
+- name: check_invoice_history
+  purpose: Check prior invoices in fixture history and the sandbox ledger
+  access: read
+  timeout_s: 2.0
+  max_attempts: 3
+  retry_on: *id001
+  impl: mock
+- name: retrieve_finance_documents
+  purpose: Retrieve policy and case evidence by lane
+  access: read
+  timeout_s: 2.0
+  max_attempts: 3
+  retry_on: *id001
+  impl: real
+- name: place_payment_block
+  purpose: Place a restrict-only payment block
+  access: write
+  timeout_s: 3.0
+  max_attempts: 1
+  retry_on: &id002 []
+  impl: simulated
+- name: submit_finance_decision
+  purpose: Record a human-approved decision in the sandbox ledger
+  access: write
+  timeout_s: 3.0
+  max_attempts: 1
+  retry_on: *id002
+  impl: simulated
+backoff:
+  base_s: 0.2
+  multiplier: 2
+  max_s: 1.0
+  jitter: false
+budget:
+  max_steps: 40
+  max_tool_calls: 20
+  unit: tool_invocation
+  retry_attempts_counted: false

@@ -1,0 +1,70 @@
+# Decision log VI.
+default: DENY
+tools:
+  place_payment_block:
+    actions:
+      BLOCK:
+        requires: SYSTEM_FAILSAFE
+        bound_to:
+        - run_id
+        - rule_id
+        - action
+    authorisation_id: sha256(run_id|rule_id|BLOCK)
+    authorisation_checkpointed_before_call: true
+    rule_id: the failing rule, or a reserved ID on its path
+    reserved_rule_ids:
+    - APPROVER_REJECT
+    - REVALIDATION
+    - UNIQUE_VIOLATION
+    repeat_for_run: no-op returning the existing block (not DUPLICATE_RISK)
+  submit_finance_decision:
+    actions:
+      POST:
+        requires: HUMAN_APPROVAL
+        approval_state: APPROVED
+        never_state: &id001
+        - INVALIDATED
+        bound_to: &id002
+        - run_id
+        - payload_hash
+        - action
+        blocked_run: DENY
+      REJECT:
+        requires: HUMAN_APPROVAL
+        approval_state: APPROVED
+        never_state: *id001
+        bound_to: *id002
+      HOLD:
+        requires: HUMAN_APPROVAL
+        approval_state: APPROVED
+        never_state: *id001
+        bound_to: *id002
+      ESCALATE:
+        requires: HUMAN_APPROVAL
+        approval_state: APPROVED
+        never_state: *id001
+        bound_to: *id002
+never:
+- tool: submit_finance_decision
+  authorisation: SYSTEM_FAILSAFE
+- tool: submit_finance_decision
+  approval_state: INVALIDATED
+- tool: submit_finance_decision
+  action: POST
+  run_has_block: true
+- tool: place_payment_block
+  action_other_than: BLOCK
+idempotency_key:
+  formula: sha256(run_id|approval_or_authorisation_id|action)
+  same_key_same_payload: stored response
+  same_key_different_payload: IDEMPOTENCY_CONFLICT
+  atomicity: ledger row and idempotency record in one transaction
+  stored_outcomes: committed only
+unique_constraints:
+- UNIQUE(run_id, action) on ledger and blocks
+- UNIQUE(vendor, normalised invoice) WHERE action = POST; violation => DUPLICATE_RISK
+append_only:
+- ledger
+- blocks
+- audit
+money_storage: canonical Decimal TEXT

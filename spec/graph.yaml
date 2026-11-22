@@ -1,0 +1,132 @@
+# Plan section 3 and decision log V.
+nodes:
+- VALIDATE
+- FETCH_INVOICE
+- FETCH_VENDOR
+- CHECK_HISTORY
+- FETCH_PO
+- RETRIEVE_POLICY
+- RECONCILE
+- EVALUATE
+- DRAFT_RATIONALE
+- ROUTE
+- PLACE_BLOCK
+- REQUEST_APPROVAL
+- REVALIDATE
+- SUBMIT
+- SUBMIT_UNKNOWN
+- COMPLETE
+- REJECTED_BY_APPROVER
+- FAILED
+pause_nodes:
+- REQUEST_APPROVAL
+terminal:
+- COMPLETE
+- REJECTED_BY_APPROVER
+- FAILED
+approve_on_blocked_run:
+  applied_at: EVALUATE
+  becomes: HOLD_FOR_INFORMATION
+  category: OTHER_CONTROL_RISK
+  owner: AP Operations
+  reason: a block has no release path, so a blocked run never posts; manual review
+transitions:
+- from: VALIDATE
+  when: valid
+  to: FETCH_INVOICE
+- from: FETCH_INVOICE
+  when: done
+  to: FETCH_VENDOR
+- from: FETCH_VENDOR
+  when: done
+  to: CHECK_HISTORY
+- from: CHECK_HISTORY
+  when: has_po_ref
+  to: FETCH_PO
+- from: CHECK_HISTORY
+  when: no_po_ref
+  to: RETRIEVE_POLICY
+- from: FETCH_PO
+  when: done
+  to: RETRIEVE_POLICY
+- from: RETRIEVE_POLICY
+  when: done
+  to: RECONCILE
+- from: RECONCILE
+  when: done
+  to: EVALUATE
+- from: EVALUATE
+  when: done
+  to: DRAFT_RATIONALE
+- from: DRAFT_RATIONALE
+  when: done
+  to: ROUTE
+- from: ROUTE
+  when: outcome_approve
+  to: REQUEST_APPROVAL
+- from: ROUTE
+  when: outcome_not_approve
+  to: PLACE_BLOCK
+- from: PLACE_BLOCK
+  when: blocked_before_request
+  to: REQUEST_APPROVAL
+- from: PLACE_BLOCK
+  when: blocked_after_reject
+  to: REJECTED_BY_APPROVER
+- from: PLACE_BLOCK
+  when: blocked_after_invalidation
+  to: EVALUATE
+- from: PLACE_BLOCK
+  when: blocked_after_duplicate_violation
+  to: REQUEST_APPROVAL
+- from: PLACE_BLOCK
+  when: unknown_result
+  to: SUBMIT_UNKNOWN
+- from: REQUEST_APPROVAL
+  when: approved_post_or_reject
+  to: REVALIDATE
+- from: REQUEST_APPROVAL
+  when: approved_hold_or_escalate
+  to: SUBMIT
+- from: REQUEST_APPROVAL
+  when: approver_rejected
+  to: PLACE_BLOCK
+- from: REQUEST_APPROVAL
+  when: approver_not_eligible
+  to: REQUEST_APPROVAL
+- from: REVALIDATE
+  when: unchanged
+  to: SUBMIT
+- from: REVALIDATE
+  when: changed_or_read_failure
+  to: PLACE_BLOCK
+- from: SUBMIT
+  when: committed
+  to: COMPLETE
+- from: SUBMIT
+  when: duplicate_unique_violation
+  to: PLACE_BLOCK
+- from: SUBMIT
+  when: unknown_result
+  to: SUBMIT_UNKNOWN
+- from: SUBMIT_UNKNOWN
+  when: submit_row_found
+  to: COMPLETE
+- from: SUBMIT_UNKNOWN
+  when: submit_no_row_retry
+  to: SUBMIT
+- from: SUBMIT_UNKNOWN
+  when: block_row_found
+  to: PLACE_BLOCK
+- from: SUBMIT_UNKNOWN
+  when: block_no_row_retry
+  to: PLACE_BLOCK
+- from: SUBMIT_UNKNOWN
+  when: no_row_retry_budget_exhausted
+  to: FAILED
+- from: '*'
+  when: budget_exhausted
+  to: FAILED
+- from: '*'
+  when: invariant_breach
+  to: FAILED
