@@ -3,6 +3,7 @@
 import hashlib
 import json
 import logging
+import re
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -16,6 +17,9 @@ from finagent.obs.redaction import redact
 
 _run_id: ContextVar[str | None] = ContextVar("finagent_run_id", default=None)
 _DROPPED_RECORD = '{"level": "ERROR", "event": "log_record_dropped"}'
+_SENSITIVE_KEY_TOKENS = {"abn", "account", "acct", "bank", "bsb", "tfn"}
+_SAFE_KEY = re.compile(r"[a-z][a-z0-9_]{0,63}")
+_ALLOWED_FIELDS = {"action", "amount", "code", "count", "node", "reason_code", "status", "tool"}
 _SCALARS = (str, int, float, bool, Decimal, date, datetime, type(None))
 
 logger = logging.getLogger("finagent")
@@ -34,7 +38,11 @@ def run_context(run_id: str) -> Iterator[None]:
 
 def _is_id_key(key: str) -> bool:
     is_id = key == "id" or key.endswith(("_id", "_ref"))
-    return is_id and "account" not in key  # an account identifier is payment data, not a record ID
+    return is_id and not _SENSITIVE_KEY_TOKENS & set(key.split("_"))  # payment identifiers are not record IDs
+
+
+def _is_allowed_field(name: str) -> bool:
+    return name in _ALLOWED_FIELDS or name.endswith(("_count", "_hash")) or _is_id_key(name)
 
 
 def summarise_payload(payload: Any) -> dict[str, Any]:
@@ -47,7 +55,8 @@ def summarise_payload(payload: Any) -> dict[str, Any]:
         for key, value in payload.items():
             name = str(key)
             if isinstance(value, list | tuple | dict):
-                summary[f"{name}_count"] = len(value)
+                if _SAFE_KEY.fullmatch(name):  # a payload key can itself hold sensitive data
+                    summary[f"{name}_count"] = len(value)
             elif isinstance(value, str | int) and (name == "status" or _is_id_key(name)):
                 summary[name] = value
     return summary
@@ -124,15 +133,22 @@ def log_event(
     **fields: Any,
 ) -> None:
     try:
-        safe_fields = {key: _minimum_necessary(value) for key, value in fields.items()}
+        # Decision log XIII: scalars are limited to IDs, counts, status, hashes and the decision amount.
+        safe_fields = {
+            key: _minimum_necessary(value)
+            for key, value in fields.items()
+            if _SAFE_KEY.fullmatch(key) and (_is_allowed_field(key) or not isinstance(value, _SCALARS))
+        }
+        safe_outcome = outcome if outcome is None or isinstance(outcome, str) else "[INVALID]"
+        is_number = isinstance(duration_ms, int | float) and not isinstance(duration_ms, bool)
         logger.log(
             level,
             "%s",
             event,
             extra={
                 "finagent_fields": safe_fields,
-                "finagent_outcome": outcome,
-                "finagent_duration_ms": duration_ms,
+                "finagent_outcome": safe_outcome,
+                "finagent_duration_ms": duration_ms if is_number else None,
             },
         )
     except Exception:

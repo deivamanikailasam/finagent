@@ -141,3 +141,23 @@ def test_unusual_payloads_do_not_crash_the_run(stream):
     for payload in ({1: "a", "b": 2}, cycle, Broken()):
         log_event("tool.result", payload=payload)
     assert [record["payload"] for record in records(stream)] == [{"summary_unavailable": True}] * 3
+
+
+def test_free_text_fields_are_not_logged(stream):
+    log_event("tool.failed", note="private supplier wording", error="private detail", invoice_id="INV-1001")
+    assert "private" not in stream.getvalue()
+    assert records(stream)[0]["invoice_id"] == "INV-1001"
+
+
+def test_outcome_and_duration_must_be_simple_values(stream):
+    log_event("tool.failed", outcome={"note": "private"}, duration_ms={"note": "private"})
+    record = records(stream)[0]
+    assert record["outcome"] == "[INVALID]"
+    assert "duration_ms" not in record
+    assert "private" not in stream.getvalue()
+
+
+def test_sensitive_keys_do_not_reach_the_summary(stream):
+    log_event("tool.result", payload={"12345678": [1], "bank_ref": "12345678", "bsb_id": "062000"})
+    assert "12345678" not in stream.getvalue()
+    assert "062000" not in stream.getvalue()
