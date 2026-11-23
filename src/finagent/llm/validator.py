@@ -23,6 +23,7 @@ _REFERENCE = re.compile(
     r"|#s[0-9]+|§\s*[0-9]+|\bs[0-9]+\b|\bsections?\s+[0-9]+\b",
     re.IGNORECASE,
 )
+_LINE_LABEL = re.compile(r"\blines?\s+([0-9]+)\b", re.IGNORECASE)
 _NUMBER = re.compile(r"[0-9][0-9,]*(?:\.[0-9]+)?|\.[0-9]+")
 _NO_EXCEPTIONS = re.compile(
     r"\bno\s+(?:exceptions?|issues?|problems?|concerns?)\b|\bexceptions?\s+(?:do\s+not|don't)\s+apply\b"
@@ -34,7 +35,7 @@ _OUTCOME_PHRASES = tuple(str(item).replace("_", " ").casefold() for item in Outc
 class ValidationError:
     code: str
     claim: int | None = None
-    detail: str | None = None  # a trusted ID the repair needs, never model text
+    detail: str | None = None  # a trusted ID or a matched numeral for the repair, never free model text
 
     def __str__(self) -> str:
         where = f"claim {self.claim}: " if self.claim is not None else ""
@@ -42,9 +43,11 @@ class ValidationError:
 
 
 @lru_cache(maxsize=1)
-def _forbidden() -> tuple[tuple[re.Pattern[str], ...], tuple[str, ...], tuple[re.Pattern[str], ...]]:
+def _forbidden() -> tuple[
+    tuple[tuple[str, re.Pattern[str]], ...], tuple[str, ...], tuple[re.Pattern[str], ...]
+]:
     spec = yaml.safe_load(FORBIDDEN_CLAIMS_PATH.read_text(encoding="utf-8"))
-    patterns = tuple(re.compile(item["regex"]) for item in spec["patterns"])
+    patterns = tuple((item["intent"], re.compile(item["regex"])) for item in spec["patterns"])
     allowed = tuple(item.casefold() for item in spec["allowed_contexts"])
     return patterns, allowed, tuple(re.compile(item) for item in spec.get("allowed_patterns", ()))
 
@@ -66,18 +69,26 @@ def _mixes_scripts(text: str) -> bool:
     return False
 
 
-def has_forbidden_claim(text: str) -> bool:
+def forbidden_intent(text: str) -> str | None:
+    """The configured intent a claim breaks, so a repair is told the rule and never echoes the text."""
     patterns, allowed, allowed_patterns = _forbidden()
     normal = _normalise(text)
     if _mixes_scripts(normal):
-        return True
+        return "look_alike_characters"
     checked = " ".join(normal.casefold().split())
     for phrase in allowed:
         checked = checked.replace(phrase, " ")
     for pattern in allowed_patterns:
         checked = pattern.sub(" ", checked)
     joined = re.sub(r"(?<=[a-z])-(?=[a-z])", "", checked)  # "ap-proved" reads as "approved"
-    return any(pattern.search(view) for pattern in patterns for view in (checked, joined))
+    for intent, pattern in patterns:
+        if pattern.search(checked) or pattern.search(joined):
+            return intent
+    return None
+
+
+def has_forbidden_claim(text: str) -> bool:
+    return forbidden_intent(text) is not None
 
 
 def _as_decimal(text: str) -> Decimal | None:
@@ -87,19 +98,25 @@ def _as_decimal(text: str) -> Decimal | None:
         return None
 
 
-def _numbers_are_bound(claim: Claim, values: dict[str, str]) -> bool:
+def _binding_problem(claim: Claim, values: dict[str, str], line_count: int) -> str | None:
+    """Why a claim's numbers are not bound. The text is fixed wording or a matched numeral only."""
     if any(ref not in values for ref in claim.number_refs):
-        return False
+        return "number_refs holds an unknown ID"
     text = _normalise(claim.text)
     if any(unicodedata.category(ch) == "Nd" and not ch.isascii() for ch in text):
-        return False  # digits from another script are not checked as amounts, so they are refused
+        return "digits must be ASCII"  # digits from another script are not checked as amounts
     bound = [values[ref] for ref in claim.number_refs]
     text = _REFERENCE.sub(" ", text)
+    # "line 2" is a label only when the invoice has a line 2; any other number must still be bound.
+    text = _LINE_LABEL.sub(lambda m: " " if 1 <= int(m.group(1)) <= line_count else m.group(0), text)
     for found in _DATE.findall(text):
         if found not in bound:
-            return False
+            return f"unbound date {found}"
     amounts = {amount for amount in map(_as_decimal, bound) if amount is not None}
-    return all(_as_decimal(found.rstrip(",")) in amounts for found in _NUMBER.findall(_DATE.sub(" ", text)))
+    for found in _NUMBER.findall(_DATE.sub(" ", text)):
+        if _as_decimal(found.rstrip(",")) not in amounts:
+            return f"unbound number {found.rstrip(',')}"
+    return None
 
 
 def _whole_rationale_errors(rationale: Rationale, evaluation: RationaleInput) -> list[ValidationError]:
@@ -152,10 +169,12 @@ def validate(
             errors.append(ValidationError("unknown_citation", index))
         if not _citations_support(claim, evaluation):
             errors.append(ValidationError("citation_support", index))
-        if not _numbers_are_bound(claim, values):
-            errors.append(ValidationError("number_binding", index))
-        if has_forbidden_claim(claim.text):
-            errors.append(ValidationError("forbidden_claim", index))
+        binding_problem = _binding_problem(claim, values, len(evaluation.lines))
+        if binding_problem is not None:
+            errors.append(ValidationError("number_binding", index, binding_problem))
+        intent = forbidden_intent(claim.text)
+        if intent is not None:
+            errors.append(ValidationError("forbidden_claim", index, intent))
     return [*errors, *_whole_rationale_errors(rationale, evaluation)]
 
 

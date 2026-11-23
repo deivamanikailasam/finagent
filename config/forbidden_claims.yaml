@@ -28,6 +28,6 @@ allowed_contexts:
 
 # True statements about a purchase order's status, and instructions not to pay.
 allowed_patterns:
-  - '\bpo(?:-[a-z0-9]+)?(?:\s+status)?\s+(?:is|was|remains)\s+approved\b'
+  - '\b(?:po(?:-[a-z0-9]+)?|purchase order)(?:\s+status)?\s+(?:is|was|remains)\s+approved\b'
   - '\b(?:do|does|must|should|will)\s+not\s+release\b.{0,20}\bpayment\b'
   - '\b(?:do|does|must|should|will)\s+not\s+pay\b(?:\s+(?:this|the)\s+(?:invoice|supplier|vendor|amount))?'
