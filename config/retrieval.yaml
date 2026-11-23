@@ -1,0 +1,5 @@
+use_prefix: true
+k:
+  authoritative: 5
+  case_evidence: 5
+  non_authoritative: 2
