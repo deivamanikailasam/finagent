@@ -183,7 +183,7 @@ class Retriever:
 
     def _require_known_role(self, role: str) -> None:
         if role not in KNOWN_ROLES:
-            log_event("retrieval_denied", outcome="denied", reason_code="unknown_role")
+            log_event("retrieval_denied", outcome="denied", duration_ms=0.0, reason_code="unknown_role")
             raise RetrievalDenied("unknown principal role")
 
     def lane_ranking(
@@ -224,7 +224,13 @@ class Retriever:
             restricted.extend(entry.doc_id for entry, _ in chosen if entry.chunk.restricted)
         output = RetrieveFinanceDocumentsOutput(lanes=lanes, abstained=abstained, abstain_reason=reasons)
         for doc_id in restricted:
-            log_event("restricted_access", outcome="ok", doc_id=doc_id, principal_role=principal_role)
+            log_event(
+                "restricted_access",
+                outcome="ok",
+                duration_ms=(time.perf_counter() - started) * 1000,
+                doc_id=doc_id,
+                principal_role=principal_role,
+            )
         log_event(
             "retrieval.query",
             outcome="ok",
@@ -283,7 +289,11 @@ class Retriever:
             return None
         if not self._allowed(entry.chunk, principal_role):
             log_event(
-                "restricted_denied", outcome="denied", doc_id=entry.doc_id, principal_role=principal_role
+                "restricted_denied",
+                outcome="denied",
+                duration_ms=(time.perf_counter() - started) * 1000,
+                doc_id=entry.doc_id,
+                principal_role=principal_role,
             )
             audit("denied", 0)
             raise RetrievalDenied(f"{principal_role} may not read {entry.doc_id}")
@@ -292,7 +302,13 @@ class Retriever:
             audit("not_in_force", 0)  # never hand back a section labelled authoritative outside its dates
             return None
         if chunk.restricted:
-            log_event("restricted_access", outcome="ok", doc_id=entry.doc_id, principal_role=principal_role)
+            log_event(
+                "restricted_access",
+                outcome="ok",
+                duration_ms=(time.perf_counter() - started) * 1000,
+                doc_id=entry.doc_id,
+                principal_role=principal_role,
+            )
         audit("ok", 1)
         return FetchedSection(
             entry.doc_id,
