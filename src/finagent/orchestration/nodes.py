@@ -1,6 +1,5 @@
 """One function per graph node. Each reads and updates RunState and sets state.signal."""
 
-import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal
@@ -14,14 +13,18 @@ from finagent.domain.case import Case
 from finagent.domain.enums import Outcome
 from finagent.domain.results import (
     Action,
+    Calculation,
     ExceptionRecord,
     Fact,
     FinalResult,
     Inference,
     Recommendation,
+    Unknown,
     next_review_date,
 )
-from finagent.llm.client import RationaleRequest
+from finagent.llm.prompt import PromptChunk, PromptLine, RationaleInput, build_prompt, prompt_hash
+from finagent.llm.router import Router
+from finagent.obs.redaction import redact
 from finagent.orchestration.graph import PAUSED, SPEC, RunState
 from finagent.rag.templates import TEMPLATES
 from finagent.tools.block_submit import (
@@ -50,7 +53,6 @@ BLOCK_SIGNALS = {
     "AFTER_DUPLICATE": "blocked_after_duplicate_violation",
 }
 AGENT_ROLE = "agent"
-RATIONALE_SYSTEM = "Explain the fixed outcome only."
 RECEIPT_CHECK = "receipt_evidence"
 DUPLICATE_CITATION = "FIN-POL-005#s2"
 
@@ -147,9 +149,19 @@ def retrieve_policy(state: RunState, ctx: NodeContext) -> None:
     ctx.tools.charge()
     started_as_of = _now(ctx)
     retriever = ctx.deps.retriever
+    sections: dict[str, dict[str, Any]] = {}
     for item in load_rules().values():
         for citation in item.citations:
-            retriever.fetch_by_id(citation, AGENT_ROLE, started_as_of)  # a denied source fails the run
+            section = retriever.fetch_by_id(citation, AGENT_ROLE, started_as_of)  # denial fails the run
+            if section is None:  # missing or not in force: the run must not continue on partial policy
+                raise LookupError(f"rule source unavailable: {citation}")
+            sections[section.citation] = {
+                "citation": section.citation,
+                "doc_id": section.doc_id,
+                "trust_class": str(section.trust_class),
+                "text": section.text,
+            }
+    state.policy_sections = list(sections.values())
     case = _case(state, ctx)
     filters = RetrievalFilters(case_id=state.case_id, po_ref=(state.po or {}).get("po_ref"))
     receipt_missing = state.po is None or not state.po["receipts"]
@@ -205,26 +217,55 @@ def evaluate_case(state: RunState, ctx: NodeContext) -> None:
     state.signal = "done"
 
 
-def draft_rationale(state: RunState, ctx: NodeContext) -> None:
-    """Call the model through the interface, then use the template until the validator exists (WP 7)."""
-    prompt = (
-        f"Outcome: {state.outcome}. Category: {state.primary_category}. Next action: {state.next_action}."
+def _rationale_input(state: RunState) -> RationaleInput:
+    sections = state.sections
+    lines = (state.invoice or {}).get("lines", [])
+    return RationaleInput(
+        outcome=state.outcome,
+        primary_category=state.primary_category,
+        owner=state.owner,
+        next_action=state.next_action,
+        citations=tuple(sections["citations"]),
+        facts=tuple(_facts(state)),
+        calculations=tuple(Calculation.model_validate(item) for item in sections["calculations"]),
+        exceptions=tuple(ExceptionRecord.model_validate(item) for item in sections["exceptions"]),
+        unknowns=tuple(Unknown.model_validate(item) for item in state.unknowns),
+        lines=tuple(PromptLine(line["qty"], line["unit_price"], line["line_total"]) for line in lines),
     )
-    prompt_hash = hashlib.sha256(f"{RATIONALE_SYSTEM}\n{prompt}".encode()).hexdigest()
-    if state.llm_response is None or state.prompt_hash != prompt_hash:  # a recorded reply is not re-bought
-        state.prompt_hash, state.model_id, state.llm_response = prompt_hash, None, None
-        request = RationaleRequest(
-            system=RATIONALE_SYSTEM,
-            prompt=prompt,
-            allowed_citations=tuple(state.sections["citations"]),
-        )
-        try:
-            response = ctx.deps.llm.generate_rationale(request)
-            state.model_id = response.model
-            state.llm_response = response.model_dump(mode="json")
-            ctx.deps.audit(state.run_id, "llm_call", str(response.stop_reason), model=response.model)
-        except Exception:
-            ctx.deps.audit(state.run_id, "llm_call", "error")
+
+
+def _record_rationale(state: RunState, ctx: NodeContext) -> None:
+    evaluation = _rationale_input(state)
+    chunks = [
+        PromptChunk(item["citation"], item["doc_id"], item["trust_class"], item["text"])
+        for item in (*state.policy_sections, *state.retrieved)
+    ]
+    digest = prompt_hash(build_prompt(evaluation, chunks))
+    if state.llm_response is not None and state.prompt_hash == digest:
+        return  # a recorded reply to this exact prompt is not bought again after a crash
+    state.prompt_hash, state.model_id, state.llm_response = digest, None, None
+
+    def audit(outcome: str, **detail: Any) -> None:
+        ctx.deps.audit(state.run_id, "llm_call", outcome, **detail)
+
+    config = ctx.deps.model_config
+    result = Router(ctx.deps.llm, config.rationale_source, config, audit).rationale(evaluation, chunks)
+    state.model_id = result.model
+    state.llm_response = {
+        "source": result.source,
+        "rationale": redact(result.rationale.model_dump(mode="json")),
+        "calls": result.calls,
+        "stop_reasons": result.stop_reasons,
+    }
+
+
+def draft_rationale(state: RunState, ctx: NodeContext) -> None:
+    """Run the router and record its reply. FinalResult keeps the template until the WP 7.2 validator."""
+    try:
+        _record_rationale(state, ctx)
+    except Exception as exc:  # the explanation can fail; the decision must not
+        state.llm_response = None
+        ctx.deps.audit(state.run_id, "llm_call", "error", error=type(exc).__name__)
     basis = [item["failed_rule"] for item in state.sections["exceptions"]] or ["CALC-GROSS"]
     state.sections["inferences"] = [
         Inference(

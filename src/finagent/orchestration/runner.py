@@ -14,6 +14,7 @@ from finagent.config.settings import load_settings
 from finagent.domain.enums import RunStatus
 from finagent.domain.requests import ProcessingRequest
 from finagent.domain.results import FinalResult
+from finagent.llm.anthropic_adapter import ModelConfig, load_model_config
 from finagent.llm.client import LLMClient
 from finagent.orchestration.checkpoint import fingerprints, restore
 from finagent.orchestration.graph import PAUSE_NODES, PAUSED, TERMINAL, RunState, next_node
@@ -83,6 +84,7 @@ class RunDeps:
     sandbox_db: Path
     max_steps: int
     crash_hook: Callable[[str], None] | None
+    model_config: ModelConfig
 
     def write_audit(self, event: dict[str, Any]) -> None:
         """A fresh connection per event, because tools can report from worker threads."""
@@ -161,6 +163,7 @@ def build_deps(
         sandbox_db=sandbox_db,
         max_steps=config.budget.max_steps if max_steps is None else max_steps,
         crash_hook=crash_hook,
+        model_config=load_model_config(ROOT / "config/model.yaml"),
     )
     audit_sink.append(deps.write_audit)
     return deps

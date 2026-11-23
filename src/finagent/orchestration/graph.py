@@ -35,6 +35,7 @@ class RunState:
     authority: list[dict[str, Any]] = field(default_factory=list)
     unknowns: list[dict[str, Any]] = field(default_factory=list)
     retrieved: list[dict[str, Any]] = field(default_factory=list)
+    policy_sections: list[dict[str, Any]] = field(default_factory=list)
     sections: dict[str, Any] = field(default_factory=dict)
     outcome: str | None = None
     primary_category: str | None = None

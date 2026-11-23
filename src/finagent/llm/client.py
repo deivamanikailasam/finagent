@@ -44,6 +44,7 @@ class RationaleResponse(BaseModel):
     usage: Usage = Usage()
     stop_reason: str | None = None
     response_id: str | None = None  # provider request ID, kept for the audit trail (FIN-POL-010 s4)
+    region: str | None = None  # where the provider ran the request, when it reports this
 
 
 class LLMClient(Protocol):

@@ -1,0 +1,12 @@
+# Model settings (decision log XI, plan D4). The model explains a fixed outcome; it never decides one.
+primary: claude-haiku-5-5
+effort: low
+thinking: adaptive
+max_tokens: 16000
+timeout_s: 60
+rationale_source: llm # llm or template
+
+# USD per million tokens, as quoted strings. Leave null until the owner has checked the pricing page
+# (docs/prep/RESEARCH_NOTES.md row 14). While null, the audit records the cost as unpriced.
+prices_per_mtok:
+  claude-haiku-5-5: null
