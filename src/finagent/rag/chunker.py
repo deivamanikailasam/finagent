@@ -8,8 +8,9 @@ from finagent.rag.loader import Document
 from finagent.rag.section_hash import document_body, section_hash
 
 _H2 = re.compile(r"^## (.*)$", re.MULTILINE)
-_NUMBERED = re.compile(r"([1-9][0-9]*)\.\s+\S")  # the same section numbers section_hash can locate
-_REFERENCE = re.compile(r"\b(?:FIN-POL-\d{3}(?:-OLD)?|ADV-\d{3})\b")
+_NUMBERED = re.compile(r"([1-9][0-9]{0,3})\.\s+\S")  # the same section numbers section_hash can locate
+_REFERENCE = re.compile(r"(?<![\w-])(?:FIN-POL-[0-9]{3}(?:-OLD)?|ADV-[0-9]{3})(?![\w-])")
+_TITLE_LINE = re.compile(r"\A\s*# [^\n]*\n?")
 
 
 @dataclass(frozen=True)
@@ -51,8 +52,9 @@ def chunk_document(document: Document) -> list[Chunk]:
     headings = list(_H2.finditer(body))
     numbers = [_NUMBERED.match(match.group(1)) for match in headings]
     values = [int(number.group(1)) if number else None for number in numbers]
-    # Irregular headings in a file get one whole chunk, so no text is lost and no chunk ID repeats.
-    if not headings or None in values or len(set(values)) != len(values):
+    preamble = _TITLE_LINE.sub("", body[: headings[0].start()]).strip() if headings else ""
+    # Irregular files get one whole chunk, so no text is lost and no chunk ID repeats.
+    if not headings or preamble or None in values or len(set(values)) != len(values):
         return [_chunk(document, 0, "Document", body.strip())]
     chunks = []
     for index, match in enumerate(headings):

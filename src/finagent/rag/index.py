@@ -1,4 +1,4 @@
-"""BM25 index over chunks. Filtering and lanes belong to the retrieval tool (WP 3.2)."""
+"""BM25 index over one set of chunks. Scoping and lanes belong to the retrieval tool."""
 
 import math
 from collections import Counter
@@ -18,6 +18,8 @@ class BM25Index:
         self.chunks = tuple(chunks)
         self.use_prefix = use_prefix
         corpus = [tokenize(chunk.prefixed_text if use_prefix else chunk.text) for chunk in self.chunks]
+        if not any(corpus):
+            raise ValueError("cannot index chunks that contain no tokens")
         self._bm25 = bm25s.BM25()
         self._bm25.index(corpus, show_progress=False)
         self._terms = {chunk.chunk_id: set(tokens) for chunk, tokens in zip(self.chunks, corpus, strict=True)}
@@ -43,14 +45,17 @@ class BM25Index:
     def retrieve(
         self, query_tokens: list[str], k: int, weight_mask: np.ndarray | None = None
     ) -> list[tuple[Chunk, float]]:
-        """Return up to k (chunk, score) pairs. A mask of zeros excludes chunks before scoring."""
+        """Return up to k positive-scoring (chunk, score) pairs, ordered by (-score, chunk ID)."""
         if weight_mask is not None and len(weight_mask) != len(self.chunks):
             # A misaligned mask could expose a chunk the caller meant to exclude.
             raise ValueError("weight_mask length must equal the number of chunks")
-        known = [token for token in query_tokens if token in self._bm25.vocab_dict]
+        # Each term counts once, matching how coverage measures the query.
+        known = [t for t in dict.fromkeys(query_tokens) if t and t in self._bm25.vocab_dict]
         if not known or k < 1:
             return []
+        # Score everything before cutting to k, so ties at the cutoff are deterministic.
         indices, scores = self._bm25.retrieve(
-            [known], k=min(k, len(self.chunks)), weight_mask=weight_mask, show_progress=False
+            [known], k=len(self.chunks), weight_mask=weight_mask, show_progress=False
         )
-        return [(self.chunks[int(i)], float(s)) for i, s in zip(indices[0], scores[0], strict=True)]
+        pairs = [(self.chunks[int(i)], float(s)) for i, s in zip(indices[0], scores[0], strict=True) if s > 0]
+        return sorted(pairs, key=lambda pair: (-pair[1], pair[0].chunk_id))[:k]

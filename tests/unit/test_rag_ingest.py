@@ -110,7 +110,7 @@ def test_frontmatter_mismatch_is_a_finding(corpus_copy, tmp_path):
     )
     result = ingest(corpus_copy, REGISTRY)
     assert any(item.code == "frontmatter_mismatch" and item.detail == "version" for item in result.findings)
-    assert result.document("FIN-POL-002").version == "2.4"
+    assert result.document("FIN-POL-002").version.startswith("modified:")  # never the approved version
 
 
 def test_unparseable_frontmatter_does_not_crash(corpus_copy):

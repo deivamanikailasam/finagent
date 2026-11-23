@@ -54,9 +54,15 @@ class IngestResult:
     documents: tuple[Document, ...]
     findings: tuple[Finding, ...]
     index_hash: str
+    registry_sha256: str = ""
 
     def document(self, doc_id: str) -> Document | None:
         return next((item for item in self.documents if item.doc_id == doc_id), None)
+
+    @property
+    def has_integrity_findings(self) -> bool:
+        """True when a registered document is missing, edited or unreadable."""
+        return any(finding.doc_id is not None for finding in self.findings)
 
 
 def _corpus_files(corpus_dir: Path) -> Iterator[tuple[Path, str]]:
@@ -75,9 +81,16 @@ def _frontmatter(text: str) -> dict[str, Any] | None:
         return {}
     try:
         parsed = yaml.safe_load(match.group(1))
-    except yaml.YAMLError:
+    except (yaml.YAMLError, ValueError, RecursionError):  # bad dates, huge integers, deep nesting
         return None
     return parsed if isinstance(parsed, dict) else None
+
+
+def _scalar_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    # Never stringify a container: a hostile YAML alias could expand it enormously.
+    return str(value) if isinstance(value, str | int | float | date) else "<non-scalar>"
 
 
 def _frontmatter_findings(meta: dict[str, Any], entry: RegistryEntry) -> list[Finding]:
@@ -91,8 +104,7 @@ def _frontmatter_findings(meta: dict[str, Any], entry: RegistryEntry) -> list[Fi
         checks.append(("effective_date", entry.effective))
     findings = []
     for key, expected in checks:
-        actual = meta.get(key)
-        if (None if actual is None else str(actual)) != (None if expected is None else str(expected)):
+        if _scalar_text(meta.get(key)) != _scalar_text(expected):
             findings.append(Finding("frontmatter_mismatch", entry.file, entry.doc_id, key))
     return findings
 
@@ -119,13 +131,13 @@ def _build_document(relative: str, text: str, digest: str, entry: RegistryEntry 
             sha256=digest,
             text=text,
         )
-    trust = entry.trust_class if digest == entry.sha256 else TrustClass.EXTERNAL_UNVERIFIED
+    unchanged = digest == entry.sha256
     return Document(
         doc_id=entry.doc_id,
         file=relative,
-        version=entry.version,
+        version=entry.version if unchanged else f"modified:{digest[:8]}",  # never the approved version
         title=_title(body, relative),
-        trust_class=trust,
+        trust_class=entry.trust_class if unchanged else TrustClass.EXTERNAL_UNVERIFIED,
         effective=entry.effective,
         superseded=entry.superseded,
         acl=entry.acl,  # an edited restricted file stays restricted
@@ -157,6 +169,9 @@ def ingest(corpus_dir: Path, registry_path: Path) -> IngestResult:
         except UnicodeDecodeError:
             findings.append(Finding("not_utf8", relative, doc_id))
             continue
+        except OSError:
+            findings.append(Finding("unreadable_file", relative, doc_id))
+            continue
         digest = hashlib.sha256(text.encode()).hexdigest()
         meta = _frontmatter(text)
         if meta is None:
@@ -170,7 +185,8 @@ def ingest(corpus_dir: Path, registry_path: Path) -> IngestResult:
         documents.append(_build_document(relative, text, digest, entry))
     for missing in sorted(set(registry) - seen):
         findings.append(Finding("registered_file_missing", missing, registry[missing].doc_id))
-    return IngestResult(tuple(documents), tuple(findings), _index_hash(documents))
+    registry_digest = hashlib.sha256(registry_path.read_bytes()).hexdigest()
+    return IngestResult(tuple(documents), tuple(findings), _index_hash(documents), registry_digest)
 
 
 def is_authoritative(result: IngestResult, doc_id: str, as_of: datetime) -> bool:
@@ -185,12 +201,18 @@ def is_authoritative(result: IngestResult, doc_id: str, as_of: datetime) -> bool
 def _manifest(result: IngestResult) -> dict[str, Any]:
     return {
         "index_hash": result.index_hash,
+        "registry_sha256": result.registry_sha256,
         "documents": [
             {
                 "doc_id": doc.doc_id,
                 "file": doc.file,
+                "version": doc.version,
                 "sha256": doc.sha256,
                 "trust_class": str(doc.trust_class),
+                "effective": doc.effective.isoformat() if doc.effective else None,
+                "superseded": doc.superseded.isoformat() if doc.superseded else None,
+                "acl": list(doc.acl),
+                "restricted": doc.restricted,
             }
             for doc in result.documents
         ],
@@ -198,6 +220,9 @@ def _manifest(result: IngestResult) -> dict[str, Any]:
 
 
 def persist_manifest(result: IngestResult, path: Path) -> None:
+    if result.has_integrity_findings:
+        # Recording a damaged corpus as the baseline would make the damage verify as clean.
+        raise IndexIntegrityError("refusing to record a manifest for a corpus with integrity findings")
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(_manifest(result), indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -213,18 +238,38 @@ def verify_index(result: IngestResult, path: Path) -> None:
         raise IndexIntegrityError("index manifest does not match the corpus")
 
 
+def load_verified(corpus_dir: Path, registry_path: Path, manifest_path: Path) -> IngestResult:
+    """Ingest and fail closed unless the corpus and registry match the recorded manifest."""
+    result = ingest(corpus_dir, registry_path)
+    if not manifest_path.exists():
+        persist_manifest(result, manifest_path)
+    verify_index(result, manifest_path)
+    return result
+
+
+def _printable(text: str) -> str:
+    # A file name containing a newline must not be able to forge a row in the report.
+    return text.encode("unicode_escape").decode("ascii")
+
+
 def trust_report(result: IngestResult) -> str:
     rows = [
-        f"{doc.doc_id:<18} {doc.trust_class:<20} {doc.version:<12} {doc.file}" for doc in result.documents
+        f"{_printable(doc.doc_id):<18} {doc.trust_class:<20} {doc.version:<12} {_printable(doc.file)}"
+        for doc in result.documents
     ]
-    notes = [f"finding: {item.code} {item.file} {item.detail}".rstrip() for item in result.findings]
+    notes = [
+        f"finding: {item.code} {_printable(item.file)} {item.detail}".rstrip() for item in result.findings
+    ]
     return "\n".join([*rows, *notes, f"documents: {len(result.documents)}  findings: {len(result.findings)}"])
 
 
 def main() -> None:
     result = ingest(Path("corpus"), Path("config/registry.yaml"))
-    persist_manifest(result, Path(os.environ.get("FINAGENT_HOME") or "var") / "index_manifest.json")
     print(trust_report(result))
+    try:
+        persist_manifest(result, Path(os.environ.get("FINAGENT_HOME") or "var") / "index_manifest.json")
+    except IndexIntegrityError as exc:
+        raise SystemExit(str(exc)) from None
 
 
 if __name__ == "__main__":
