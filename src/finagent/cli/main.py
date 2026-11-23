@@ -53,9 +53,15 @@ def _fail(message: str) -> typer.Exit:
 
 def _service() -> RunService:
     try:
-        return RunService()
+        settings = load_settings()
     except SettingsError as exc:
         raise _fail(str(exc)) from None
+    if settings.llm == "fake":
+        return RunService(settings.home)
+    if settings.anthropic_api_key is None:
+        raise _fail("FINAGENT_LLM=anthropic needs ANTHROPIC_API_KEY in the environment")
+    model_config = load_model_config(ROOT / "config/model.yaml")
+    return RunService(settings.home, lambda: AnthropicLLM(model_config))
 
 
 @app.command("ingest")

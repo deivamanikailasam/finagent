@@ -16,20 +16,23 @@ from finagent.domain.requests import ProcessingRequest
 from finagent.domain.results import FinalResult
 from finagent.llm.anthropic_adapter import ModelConfig, load_model_config
 from finagent.llm.client import LLMClient
-from finagent.orchestration.checkpoint import fingerprints, restore
+from finagent.orchestration.checkpoint import fingerprints, rehydrate, restore
 from finagent.orchestration.graph import PAUSE_NODES, PAUSED, TERMINAL, RunState, next_node
 from finagent.orchestration.nodes import HANDLERS, NodeContext, build_result
 from finagent.persistence.db import connect, migrate, transaction
+from finagent.persistence.locks import run_lock
 from finagent.persistence.repos import ApprovalRepo, AuditRepo, CheckpointRepo, RunRepo
 from finagent.rag.loader import load_verified
 from finagent.rag.retrieve import Retriever, load_case_documents
-from finagent.tools.block_submit import ApprovalView
+from finagent.tools.block_submit import ApprovalView, derive_key
 from finagent.tools.declarations import ToolsConfig, load_tool_declarations
 from finagent.tools.factory import build_tools
 from finagent.tools.runner import BudgetExceeded, Executor, RunContext, ThreadExecutor, ToolRunner
 from finagent.tools.schemas import (
     CheckInvoiceHistoryInput,
     GetAuthorityRecordInput,
+    GetInvoiceDocumentInput,
+    GetPurchaseOrderInput,
     GetVendorRecordInput,
 )
 
@@ -142,23 +145,54 @@ def build_deps(
     case_id = case_dir.name
     run_request = request or json.loads((case_dir / "request.json").read_text(encoding="utf-8"))
     vendor_id = run_request["vendor_id"]
+    run_executor = executor or ThreadExecutor()
+    deadlines = {tool.name: tool.timeout_s for tool in config.tools}
+
+    def bounded(name: str, request: Any) -> Any:
+        """Approval-path reads keep the tool's declared deadline, so a hung read cannot stall a decision."""
+        return run_executor.run(lambda: tools[name](request), deadlines[name], lambda _late: None)
+
+    def optional(name: str, request: Any) -> Any:
+        try:
+            return bounded(name, request)
+        except Exception:  # recorded as None, so a value that later changes or vanishes invalidates
+            return None
+
+    def documents() -> dict[str, Any]:
+        invoice_ref = run_request["invoice_ref"]
+        invoice = optional(
+            "get_invoice_document", GetInvoiceDocumentInput(case_id=case_id, invoice_ref=invoice_ref)
+        )
+        if invoice is None:
+            return {"invoice": None}
+        po = None
+        if invoice.po_ref:
+            po = optional("get_purchase_order", GetPurchaseOrderInput(case_id=case_id, po_ref=invoice.po_ref))
+        return {
+            "gross": str(invoice.gross),
+            "remit": invoice.remit_to.fingerprint if invoice.remit_to else None,
+            "po_status": str(po.approval_status) if po else None,
+            "po_total": str(po.totals.incl_tax) if po else None,
+        }
+
     approvals = ApprovalService(
         conn,
         clock,
-        lambda: tools["get_authority_record"](GetAuthorityRecordInput(case_id=case_id)).records,
-        lambda: tools["get_vendor_record"](GetVendorRecordInput(case_id=case_id, vendor_id=vendor_id)),
+        lambda: bounded("get_authority_record", GetAuthorityRecordInput(case_id=case_id)).records,
+        lambda: bounded("get_vendor_record", GetVendorRecordInput(case_id=case_id, vendor_id=vendor_id)),
         lambda: (
-            tools["check_invoice_history"](
-                CheckInvoiceHistoryInput(case_id=case_id, vendor_id=vendor_id)
+            bounded(
+                "check_invoice_history", CheckInvoiceHistoryInput(case_id=case_id, vendor_id=vendor_id)
             ).records
         ),
+        documents,
     )
     deps = RunDeps(
         case_dir=case_dir,
         home=home,
         clock=clock,
         llm=llm,
-        executor=executor or ThreadExecutor(),
+        executor=run_executor,
         config=config,
         retriever=retriever,
         tools=tools,
@@ -212,12 +246,47 @@ class Runner:
 
     def resume(self, run_id: str) -> RunView:
         """Continue after a decision. A run that is still waiting, or finished, is returned unchanged."""
-        state = restore(self._checkpoints, run_id)
-        if state.node in TERMINAL:
-            return self._view(state)
-        if state.node in PAUSE_NODES and state.signal == PAUSED and not self._leave_pause(state):
-            return self._view(state)
-        return self._drive(state)
+        with run_lock(self.deps.home, run_id):  # two commands can never drive one run at once
+            state = restore(self._checkpoints, run_id)
+            if state.node in TERMINAL:
+                return self._view(state)
+            if state.node in PAUSE_NODES and state.signal == PAUSED:
+                if not self._rehydrate_or_fail(state):
+                    return self._view(state)
+                if not self._leave_pause(state):
+                    return self._view(state)
+                return self._drive(state)
+            if not self._rehydrate_or_fail(state):
+                return self._view(state)
+            self._revalidate_before_retry(state)
+            return self._drive(state)
+
+    def view(self, run_id: str) -> RunView:
+        """The run as it stands, without moving it."""
+        return self._view(restore(self._checkpoints, run_id))
+
+    def _rehydrate_or_fail(self, state: RunState) -> bool:
+        try:
+            rehydrate(state, self.deps.retriever, self.deps.clock.now_utc())
+            return True
+        except Exception as exc:  # the controls must not re-run on missing evidence
+            self.deps.audit(state.run_id, "node_error", type(exc).__name__, node=state.node)
+            state.signal = "invariant_breach"
+            self._advance(state.node, state)
+            return False
+
+    def _revalidate_before_retry(self, state: RunState) -> None:
+        """After a crash at SUBMIT, a POST or REJECT with no committed row is checked again first."""
+        if state.node != "SUBMIT" or state.action not in {"POST", "REJECT"}:
+            return
+        key = derive_key(state.run_id, state.approval_id, state.action)
+        conn = connect(self.deps.sandbox_db)
+        try:
+            committed = conn.execute("SELECT 1 FROM idempotency WHERE key = ?", (key,)).fetchone()
+        finally:
+            conn.close()
+        if committed is None:
+            state.node = "REVALIDATE"
 
     def _leave_pause(self, state: RunState) -> bool:
         record = self.deps.approvals.get(state.approval_id)

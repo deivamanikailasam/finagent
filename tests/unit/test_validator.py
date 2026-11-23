@@ -164,8 +164,8 @@ def test_two_invalid_replies_use_the_template_and_keep_the_outcome(mode):
 
 def test_validated_model_text_reaches_the_final_result():
     report = run_case("FIN-001", llm=FakeLLM("good"))
-    assert report.result.recommendation.rationale_source == "LLM"
-    assert {item.source for item in report.result.inferences} == {"LLM"}
+    assert report.result.recommendation.rationale_source == "FAKE"  # never labelled as a real model
+    assert {item.source for item in report.result.inferences} == {"FAKE"}
 
 
 @pytest.mark.parametrize("mode", ["injection_obeying", "invented_citation"])

@@ -38,7 +38,7 @@ Value = Annotated[
     BeforeValidator(_decode_value),
     PlainSerializer(_encode_value, when_used="json"),
 ]
-Source = Literal["TEMPLATE", "LLM"]
+Source = Literal["TEMPLATE", "LLM", "FAKE"]  # FAKE: the offline stand-in model, never a real one
 
 
 class Fact(DomainModel):

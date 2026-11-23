@@ -175,6 +175,12 @@ class ApprovalRecord:
         """The recommended outcome, read from the payload the approval is bound to."""
         return json.loads(self.payload_json)["outcome"]
 
+    @property
+    def commitment(self) -> Decimal:
+        """The amount an approver's limit must cover: the larger of invoice gross and PO total."""
+        stored = json.loads(self.payload_json).get("commitment")
+        return Decimal(stored) if stored is not None else self.amount
+
 
 @dataclass(frozen=True)
 class EscalationRecord:
@@ -260,6 +266,15 @@ class ApprovalRepo:
         cursor = self._conn.execute(
             f"UPDATE approvals SET status = ?, {assignments} WHERE approval_id = ? AND status = 'PENDING'",
             (status, *fields.values(), approval_id),
+        )
+        return cursor.rowcount == 1
+
+    def retire_pending(self, approval_id: str, now: datetime) -> bool:
+        """Compare-and-set: a stricter recommendation replaces a request nobody has decided."""
+        cursor = self._conn.execute(
+            "UPDATE approvals SET status = 'INVALIDATED', revalidated_at = ? "
+            "WHERE approval_id = ? AND status = 'PENDING'",
+            (now.isoformat(), approval_id),
         )
         return cursor.rowcount == 1
 

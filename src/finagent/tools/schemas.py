@@ -200,6 +200,7 @@ class BlockPayload(DomainModel):
 class LineQuantity(DomainModel):
     po_line_ref: str = Field(min_length=1)
     qty: Quantity
+    received: Quantity | None = None  # bound to the approval, and rechecked inside the POST transaction
 
 
 class DecisionPayload(BlockPayload):
@@ -211,6 +212,7 @@ class DecisionPayload(BlockPayload):
     outcome: Outcome
     hold_category: ExceptionCategory | None = None
     line_quantities: tuple[LineQuantity, ...] = ()
+    commitment: Money | None = None  # max(invoice gross, PO total): what an approver's limit must cover
 
 
 def payload_hash_of(payload: DomainModel) -> str:

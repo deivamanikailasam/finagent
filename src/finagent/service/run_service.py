@@ -18,6 +18,7 @@ from finagent.orchestration.checkpoint import restore
 from finagent.orchestration.checkpoint import resume as resume_run
 from finagent.orchestration.runner import ROOT, Runner, RunView, build_deps
 from finagent.persistence.db import connect
+from finagent.persistence.locks import RunBusy
 from finagent.persistence.repos import AuditRepo, CheckpointRepo, RunRepo
 
 CASES_DIR = ROOT / "fixtures" / "cases"
@@ -143,7 +144,11 @@ class RunService:
 
     def start(self, command: StartCommand) -> RunSummary:
         case_dir, override = self._resolve_start(command)
-        as_of = command.as_of or datetime.fromisoformat(_read_json(case_dir / "meta.json")["as_of"])
+        case_date = datetime.fromisoformat(_read_json(case_dir / "meta.json")["as_of"])
+        if command.as_of is not None and command.as_of < case_date:
+            # An earlier date could bring an expired delegation back into force.
+            raise RunServiceError("--as-of cannot be earlier than the case date")
+        as_of = command.as_of or case_date
         deps = build_deps(case_dir, self._home, FixedClock(as_of), self._llm_factory(), request=override)
         try:
             return _summary(Runner(deps).start())
@@ -197,7 +202,15 @@ class RunService:
                 raise RunServiceError(f"this approval belongs to run {owner}; decide on that run")
             _require_reviewed_request(command, state, record.status)
             response = deps.approvals.decide(state.approval_id, command.approver, decision, command.reason)
-            view = Runner(deps).resume(command.run_id)
+            runner = Runner(deps)
+            # A refused command changes nothing. Recovery of an interrupted run is `run resume`.
+            view = (
+                runner.resume(command.run_id)
+                if response.code in APPLIED_CODES
+                else runner.view(command.run_id)
+            )
+        except RunBusy as exc:
+            raise RunServiceError(str(exc)) from None
         finally:
             deps.conn.close()
         return DecisionResponse(
@@ -225,5 +238,7 @@ class RunService:
         deps, _ = self._deps_for(run_id)
         try:
             return _summary(resume_run(run_id, deps))
+        except RunBusy as exc:
+            raise RunServiceError(str(exc)) from None
         finally:
             deps.conn.close()

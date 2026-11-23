@@ -62,7 +62,11 @@ class RunState:
     actions: list[dict[str, Any]] = field(default_factory=list)
 
     def to_json(self) -> str:
-        return json.dumps(asdict(self), sort_keys=True, default=str)
+        """Case-document text stays in its source file, so supplier data is not copied into the database."""
+        data = asdict(self)
+        data["evidence"] = {}
+        data["retrieved"] = [{**item, "text": ""} for item in data["retrieved"]]
+        return json.dumps(data, sort_keys=True, default=str)
 
     @classmethod
     def from_json(cls, text: str) -> "RunState":

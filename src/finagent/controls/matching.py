@@ -3,8 +3,12 @@
 from decimal import Decimal
 from typing import Any
 
-from finagent.config.clock import Clock
-from finagent.controls.calculator import CalcResult, LineCheck
+from finagent.config.clock import Clock, local_date
+from finagent.controls.calculator import (
+    CalcResult,
+    LineCheck,
+    line_total_is_correct,
+)
 from finagent.controls.rules import rule
 from finagent.domain.case import Case
 from finagent.domain.results import PolicyFinding
@@ -140,6 +144,18 @@ def _request_failures(case: Case, calc: CalcResult) -> list[PolicyFinding]:
                 difference=total.stated - total.expected,
             )
         )
+    for line in invoice.lines:
+        if not line_total_is_correct(line):
+            failures.append(
+                _fail(
+                    case,
+                    "REQ-MATCHES-INVOICE",
+                    line_ref=line.line_id,
+                    detail="line total differs from quantity x unit price",
+                    expected=Decimal(line.qty) * line.unit_price,
+                    actual=line.line_total,
+                )
+            )
     if vendor is not None:
         if request.vendor_id != vendor.vendor_id:
             failures.append(_fail(case, "REQ-MATCHES-INVOICE", detail="request vendor"))
@@ -198,6 +214,18 @@ def _receipt_findings(case: Case, checks: tuple[LineCheck, ...], po_citation: st
                         actual=noted.get(ref),
                     )
                 )
+    today = local_date(case.as_of)
+    disagreements.extend(
+        _fail(
+            case,
+            "TYPED-RECORD-PRECEDENCE",
+            *citations,
+            line_ref=receipt.po_line_ref,
+            detail="receipt is dated after the case date",
+        )
+        for receipt in po.receipts
+        if receipt.date > today
+    )
     return [
         *_or_pass(missing, "RECEIPT-REQUIRED", *citations),
         *_or_pass(unconfirmed, "SERVICE-CONFIRMED", po_citation),

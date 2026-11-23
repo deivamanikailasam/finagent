@@ -7,7 +7,14 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any, NamedTuple
 
-from finagent.domain.results import Calculation, ExceptionRecord, Fact, PolicyFinding, Unknown
+from finagent.domain.results import (
+    REVIEW_BUSINESS_DAYS,
+    Calculation,
+    ExceptionRecord,
+    Fact,
+    PolicyFinding,
+    Unknown,
+)
 from finagent.obs.redaction import redact
 
 PROMPT_VERSION = "1.0"
@@ -28,7 +35,8 @@ Return JSON with a claims list. Each claim has text, citation_ids and number_ref
 
 _PLAIN_VALUE = re.compile(r"-?[0-9]+(?:\.[0-9]+)?|[0-9]{4}-[0-9]{2}-[0-9]{2}")
 _SAFE_ID = re.compile(r"[A-Za-z0-9:_#.-]{1,60}")
-RECORD_CITATION = ("CASE:", "PO:", "VENDOR:")
+RECORD_CITATION = ("CASE:", "PO:", "VENDOR:", "HISTORY:", "INVOICE:")
+_SYSTEM_RECORDS = ("PO:", "VENDOR:", "HISTORY:", "INVOICE:")  # a CASE: ID is allowed only as case evidence
 
 
 class PromptChunk(NamedTuple):
@@ -94,7 +102,7 @@ def allowed_citations(evaluation: RationaleInput, chunks: Sequence[PromptChunk])
     """Authoritative sections and case-evidence IDs the decision used. Nothing else may be cited."""
     cited = set(evaluation.citations)
     authoritative = {c.citation for c in chunks if c.trust_class == "AUTHORITATIVE" and c.citation in cited}
-    records = {c for c in cited if c.startswith(RECORD_CITATION) and _SAFE_ID.fullmatch(c)}
+    records = {c for c in cited if c.startswith(_SYSTEM_RECORDS) and _SAFE_ID.fullmatch(c)}
     evidence = {
         c.citation for c in chunks if c.trust_class == "CASE_EVIDENCE" and _SAFE_ID.fullmatch(c.citation)
     }
@@ -120,8 +128,8 @@ def _exception_lines(evaluation: RationaleInput, values: _Sections) -> list[str]
     lines = []
     for index, item in enumerate(evaluation.exceptions, 1):
         lines.append(
-            f"EXC-{index}: {item.category}, rule {item.failed_rule}, owner {item.owner}, "
-            f"citations {', '.join(item.citations)}"
+            f"EXC-{index}: {item.category}, rule {_safe_id(item.failed_rule)}, owner {_clean(item.owner)}, "
+            f"citations {', '.join(_safe_id(citation) for citation in item.citations)}"
         )
         for name in ("expected", "actual", "difference", "threshold"):
             values.add(f"EXC-{index}-{name.upper()}", getattr(item, name))
@@ -129,6 +137,7 @@ def _exception_lines(evaluation: RationaleInput, values: _Sections) -> list[str]
 
 
 def _add_values(evaluation: RationaleInput, values: _Sections) -> None:
+    values.add("REVIEW-BUSINESS-DAYS", REVIEW_BUSINESS_DAYS)
     for fact in evaluation.facts:
         values.add(fact.id, fact.value)
     for calculation in evaluation.calculations:

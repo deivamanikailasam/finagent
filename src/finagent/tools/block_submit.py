@@ -2,8 +2,10 @@
 
 import hashlib
 import sqlite3
+import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -24,6 +26,25 @@ from finagent.tools.schemas import (
 
 PERMISSIONS_PATH = Path(__file__).resolve().parents[3] / "spec" / "submit_permissions.yaml"
 Audit = Callable[[dict[str, Any]], None]
+
+
+_write_deadline = threading.local()
+
+
+@contextmanager
+def write_deadline(seconds: float) -> Iterator[None]:
+    """A write that overruns rolls back, so it cannot commit after its caller has given up."""
+    _write_deadline.at = time.monotonic() + seconds
+    try:
+        yield
+    finally:
+        _write_deadline.at = None
+
+
+def _check_write_deadline() -> None:
+    limit = getattr(_write_deadline, "at", None)
+    if limit is not None and time.monotonic() > limit:
+        raise TimeoutError("write deadline passed before commit")
 
 
 class WriteRefused(Exception):
@@ -134,6 +155,7 @@ def place_payment_block(
                 "VALUES (?, 'BLOCK', ?, ?, ?, ?)",
                 (request.run_id, request.rule_id, invoice_key, authorisation_id, clock.now_utc().isoformat()),
             )
+            _check_write_deadline()
     output = _block_output(existing[0] if existing else authorisation_id)
     outcome = "existing_block" if existing else "committed"
     _emit(
@@ -209,6 +231,21 @@ def _insert_decision(conn: sqlite3.Connection, request: SubmitFinanceDecisionInp
     return WriteOutput(status="COMMITTED", posting_ref=posting_ref, amount=payload.amount)
 
 
+def _check_received_quantities(conn: sqlite3.Connection, request: SubmitFinanceDecisionInput) -> None:
+    """Two invoices cannot together post more than was received on a PO line."""
+    payload = request.payload
+    for line in payload.line_quantities:
+        if line.received is None:
+            continue
+        posted = conn.execute(
+            "SELECT COALESCE(SUM(l.qty), 0) FROM ledger_lines l JOIN ledger g ON g.id = l.ledger_id "
+            "WHERE g.action = 'POST' AND l.po_ref IS ? AND l.po_line_ref = ?",
+            (payload.po_ref, line.po_line_ref),
+        ).fetchone()[0]
+        if posted + line.qty > line.received:
+            raise DuplicateRisk("QUANTITY_EXCEEDS_RECEIVED")
+
+
 def submit_finance_decision(
     conn: sqlite3.Connection,
     request: SubmitFinanceDecisionInput,
@@ -239,6 +276,8 @@ def submit_finance_decision(
                 ).fetchone()
                 if blocked is not None and rule.get("blocked_invoice") == "DENY":
                     raise Denied("the invoice has a payment block")
+                if request.action == "POST":
+                    _check_received_quantities(conn, request)
                 now = clock.now_utc().isoformat()
                 output = _insert_decision(conn, request, now)
                 _after_ledger_insert(conn)
@@ -247,6 +286,7 @@ def submit_finance_decision(
                     "VALUES (?, ?, ?, ?)",
                     (request.idempotency_key, request.payload_hash, output.model_dump_json(), now),
                 )
+                _check_write_deadline()
     except sqlite3.IntegrityError as exc:
         if "UNIQUE constraint failed: ledger.vendor_id" in str(exc):
             raise DuplicateRisk("DUPLICATE_RISK") from exc

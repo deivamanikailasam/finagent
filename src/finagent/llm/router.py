@@ -29,13 +29,14 @@ class RouterResult:
     stop_reasons: dict[str, int]
 
 
-def template_rationale(evaluation: RationaleInput) -> Rationale:
+def template_rationale(evaluation: RationaleInput, allowed: Sequence[str] | None = None) -> Rationale:
     """A deterministic explanation that mentions every exception and unknown."""
+    usable = set(evaluation.citations if allowed is None else allowed)
     claims = [Claim(text=f"Recommended {evaluation.outcome}. {evaluation.next_action}.")]
     claims += [
         Claim(
             text=f"Exception {item.category} from rule {item.failed_rule}, owner {item.owner}.",
-            citation_ids=item.citations,
+            citation_ids=tuple(citation for citation in item.citations if citation in usable),
         )
         for item in evaluation.exceptions
     ]
@@ -94,8 +95,8 @@ class Router:
         model: str | None = None
         calls = 0
         errors: tuple[str, ...] = ()
+        allowed = allowed_citations(evaluation, chunks)
         if self._source != "template":
-            allowed = allowed_citations(evaluation, chunks)
             for hop in range(1, MAX_MODEL_CALLS + 1):
                 request = RationaleRequest(
                     system=SYSTEM, prompt=prompt, allowed_citations=allowed, repair_errors=errors
@@ -118,4 +119,6 @@ class Router:
                 self._record(hop, digest, response, errors[0] if errors else "ok")
                 if not errors:
                     return RouterResult("LLM", response.parsed, digest, model, calls, dict(stops))
-        return RouterResult("TEMPLATE", template_rationale(evaluation), digest, model, calls, dict(stops))
+        return RouterResult(
+            "TEMPLATE", template_rationale(evaluation, allowed), digest, model, calls, dict(stops)
+        )

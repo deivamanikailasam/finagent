@@ -23,7 +23,13 @@ _CREDENTIAL = re.compile(
 _API_KEY = re.compile(r"(?i)sk-ant-[\w-]+")
 _BEARER = re.compile(r"(?i)\b(bearer[\s:=]+)[A-Za-z0-9._~+/=-]{8,}")
 _EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
-_IBAN = re.compile(r"\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){2,7}(?: ?[A-Z0-9]{1,3})?\b")
+_IBAN = re.compile(r"(?i)\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){2,7}(?: ?[A-Z0-9]{1,3})?\b")
+_CARD = re.compile(rf"{_START}\d{{4}}[ -]\d{{4}}[ -]\d{{4}}[ -]\d{{4}}{_END}")
+_INTERNATIONAL_PHONE = re.compile(r"(?<![\w#*-])\+\d{1,3}(?:[ .-]?\d){7,12}(?!\w)")
+_BANK_WORD_NUMBER = re.compile(
+    r"(?i)(\b(?:westpac|anz|nab|commbank|commonwealth|bank|pay|transfer|remit(?:tance)?)\b[\s:#-]*)"
+    rf"(\d{{6,10}}){_END}"
+)
 _BSB_AFTER_LABEL = re.compile(rf"(?i)(\bBSB\b(?:\s+(?:number|no\.?))?{_SEP})\d{{3}}[- ]?\d{{3}}(?!\d)")
 _BSB_BEFORE_LABEL = re.compile(rf"(?i){_START}\d{{3}}[- ]?\d{{3}}(\s+BSB\b)")
 _BSB_ACCOUNT_PAIR = re.compile(rf"{_START}\d{{3}}-\d{{3}}[\s,;/]+(\d{{6,10}}){_END}")
@@ -75,6 +81,9 @@ def _apply_patterns(text: str) -> str:
     text = _BEARER.sub(rf"\g<1>{MASK}", text)
     text = _EMAIL.sub(MASK, text)
     text = _IBAN.sub(MASK, text)
+    text = _CARD.sub(MASK, text)
+    text = _INTERNATIONAL_PHONE.sub(MASK, text)
+    text = _BANK_WORD_NUMBER.sub(lambda m: m.group(1) + _last_four(m.group(2)), text)
     text = _BSB_AFTER_LABEL.sub(rf"\g<1>{MASK}", text)
     text = _BSB_BEFORE_LABEL.sub(rf"{MASK}\g<1>", text)
     text = _BSB_ACCOUNT_PAIR.sub(lambda m: f"{MASK} {_last_four(m.group(1))}", text)

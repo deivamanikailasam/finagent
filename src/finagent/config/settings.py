@@ -25,9 +25,7 @@ class Settings(BaseSettings):
     home: Path = Path("./var")
     hmac_key: SecretStr
     anthropic_api_key: SecretStr | None = Field(None, validation_alias="ANTHROPIC_API_KEY")
-    model_config_path: Path = Path("config/model.yaml")
-    tools_config_path: Path = Path("config/tools.yaml")
-    retrieval_config_path: Path = Path("config/retrieval.yaml")
+    llm: Literal["fake", "anthropic"] = "fake"  # the live model is opt-in (decision log I4)
     timezone: Literal["Australia/Sydney"] = "Australia/Sydney"  # the control dates are defined on this zone
 
     @field_validator("hmac_key")

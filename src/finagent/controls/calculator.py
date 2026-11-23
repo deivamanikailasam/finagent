@@ -70,6 +70,11 @@ def _is_negative(line: InvoiceLine) -> bool:
     return line.qty < 0 or line.unit_price < 0 or line.line_total < 0
 
 
+def line_total_is_correct(line: InvoiceLine) -> bool:
+    """The billed line total must equal quantity times unit price, to the cent."""
+    return (Decimal(line.qty) * line.unit_price).quantize(CENT, ROUND_HALF_UP) == line.line_total
+
+
 def _unmapped(line: InvoiceLine, negative: bool) -> LineCheck:
     # An unmapped line is reported by LINE-MAPPED alone: it has no PO price or quantity to compare.
     return LineCheck(
@@ -79,7 +84,14 @@ def _unmapped(line: InvoiceLine, negative: bool) -> LineCheck:
 
 
 def _check_line(
-    line: InvoiceLine, po_line: PoLine, po: PurchaseOrder, invoiced: int, received: int, confirmed: bool
+    line: InvoiceLine,
+    po_line: PoLine,
+    po: PurchaseOrder,
+    invoiced: int,
+    received: int,
+    confirmed: bool,
+    line_variance_total: Decimal,
+    billed_total: Decimal,
 ) -> LineCheck:
     if _is_negative(line):
         # Negative lines are excluded from tolerance and quantity checks (decision log III).
@@ -90,15 +102,19 @@ def _check_line(
     variance = (line.unit_price - po_line.unit_price) * Decimal(line.qty)
     if po_line.kind == "freight":
         limit = Decimal(rule("TOL-FREIGHT").threshold["absolute"]) if po.freight_permitted else Decimal("0")
+        # Freight is a value, so the whole amount billed on the PO line is compared with its PO value.
+        variance = billed_total - po_line.line_value
         price_ok = abs(variance) <= limit
         return LineCheck(
             line.line_id, line.po_line_ref, "freight", True, False, price_ok, price_ok, limit, variance, True,
             True, True, line.unit_price, po_line.unit_price,
         )  # fmt: skip
     limit = _limit("TOL-SERVICES" if po_line.kind == "services" else "TOL-GOODS", po_line.line_value)
-    price_ok = abs(variance) <= limit
-    qty_ok = invoiced <= received
-    cumulative_ok = po_line.qty_invoiced_to_date + invoiced <= received
+    # Each line and the PO line as a whole must be in tolerance, so a variance cannot be split.
+    price_ok = abs(variance) <= limit and abs(line_variance_total) <= limit
+    allowed = min(received, po_line.qty)  # a receipt above the ordered quantity is not payable
+    qty_ok = invoiced <= allowed
+    cumulative_ok = po_line.qty_invoiced_to_date + invoiced <= allowed
     within = price_ok and (confirmed if po_line.kind == "services" else qty_ok)
     return LineCheck(
         line.line_id, line.po_line_ref, po_line.kind, True, False, within, price_ok, limit, variance, qty_ok,
@@ -113,9 +129,15 @@ def _line_checks(case: Case) -> tuple[LineCheck, ...]:
     counts = Counter(line.po_line_ref for line in po.lines)
     po_lines = {line.po_line_ref: line for line in po.lines if counts[line.po_line_ref] == 1}
     invoiced: dict[str | None, int] = defaultdict(int)
+    variance_total: dict[str | None, Decimal] = defaultdict(Decimal)
+    billed: dict[str | None, Decimal] = defaultdict(Decimal)
     for line in invoice.lines:
         if not _is_negative(line):
             invoiced[line.po_line_ref] += line.qty  # lines sharing a PO line are checked together
+            billed[line.po_line_ref] += line.line_total
+            if line.po_line_ref in po_lines:
+                unit_gap = line.unit_price - po_lines[line.po_line_ref].unit_price
+                variance_total[line.po_line_ref] += unit_gap * Decimal(line.qty)
     received: dict[str, int] = defaultdict(int)
     for receipt in po.receipts:
         received[receipt.po_line_ref] += receipt.qty
@@ -128,7 +150,16 @@ def _line_checks(case: Case) -> tuple[LineCheck, ...]:
         receipts = [item for item in po.receipts if item.po_line_ref == line.po_line_ref]
         confirmed = bool(receipts) and all(item.service_confirmed_by for item in receipts)
         checks.append(
-            _check_line(line, po_line, po, invoiced[line.po_line_ref], received[line.po_line_ref], confirmed)
+            _check_line(
+                line,
+                po_line,
+                po,
+                invoiced[line.po_line_ref],
+                received[line.po_line_ref],
+                confirmed,
+                variance_total[line.po_line_ref],
+                billed[line.po_line_ref],
+            )
         )
     return tuple(checks)
 

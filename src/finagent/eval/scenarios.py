@@ -15,8 +15,9 @@ from finagent.config.clock import SYDNEY, FixedClock
 from finagent.controls.decision import Evaluation, evaluate
 from finagent.domain.case import Case
 from finagent.llm.fake import FakeLLM
+from finagent.orchestration.checkpoint import rehydrate
 from finagent.orchestration.graph import RunState
-from finagent.orchestration.runner import ROOT
+from finagent.orchestration.runner import ROOT, build_deps
 from finagent.persistence.db import connect
 from finagent.persistence.repos import ApprovalRecord, ApprovalRepo, CheckpointRepo
 from finagent.service.run_service import (
@@ -197,6 +198,11 @@ class _Context:
     def replayed(self) -> Evaluation:
         """The recorded inputs evaluated again, for fields FinalResult does not carry."""
         state = self.state
+        deps = build_deps(Path(state.case_dir), self.home, FixedClock(AS_OF), self.llm, request=state.request)
+        try:
+            rehydrate(state, deps.retriever, AS_OF)
+        finally:
+            deps.conn.close()
         case = Case.model_validate(
             {
                 "request": state.request,

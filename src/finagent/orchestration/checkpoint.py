@@ -1,10 +1,13 @@
 """Restores a run from its last checkpoint and records what the run was decided against."""
 
 import hashlib
+import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from finagent.orchestration.graph import PAUSED, TERMINAL, RunState
+from finagent.orchestration.nodes import AGENT_ROLE
 from finagent.persistence.repos import CheckpointRepo
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -46,6 +49,20 @@ def restore(checkpoints: CheckpointRepo, run_id: str) -> RunState:
     if interrupted and state.visited and state.visited[-1] == state.node:
         state.visited.pop()  # saved just before a block write; the node runs again and is counted once
     return state
+
+
+def rehydrate(state: RunState, retriever: Any, as_of: datetime) -> None:
+    """Checkpoints hold no case-document text, so it is read back from its source when a run continues."""
+    evidence_path = Path(state.case_dir) / "evidence.json" if state.case_dir else None
+    if evidence_path is not None and evidence_path.is_file():
+        state.evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    for item in state.retrieved:
+        if item.get("text"):
+            continue
+        section = retriever.fetch_by_id(item["citation"], AGENT_ROLE, as_of, case_id=state.case_id)
+        if section is None:
+            raise LookupError(f"document unavailable: {item['citation']}")
+        item["text"] = section.text
 
 
 def resume(run_id: str, deps: Any) -> Any:

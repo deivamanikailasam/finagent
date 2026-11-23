@@ -59,6 +59,7 @@ class FetchedSection:
     lane: Lane
     citation: str
     text: str
+    restricted: bool = False
 
 
 @dataclass(frozen=True)
@@ -319,6 +320,7 @@ class Retriever:
             self._lane(entry, as_of),
             entry.citation,
             chunk.text,
+            bool(chunk.restricted),
         )
 
 

@@ -23,6 +23,7 @@ from finagent.domain.results import (
     Unknown,
     next_review_date,
 )
+from finagent.llm.fake import FAKE_MODEL
 from finagent.llm.prompt import PromptChunk, PromptLine, RationaleInput, build_prompt, prompt_hash
 from finagent.llm.router import Router
 from finagent.llm.validator import store_raw
@@ -55,6 +56,7 @@ BLOCK_SIGNALS = {
     "AFTER_DUPLICATE": "blocked_after_duplicate_violation",
 }
 AGENT_ROLE = "agent"
+NO_SOURCE_CITED = "NO-SOURCE-CITED"
 RECEIPT_CHECK = "receipt_evidence"
 DUPLICATE_CITATION = "FIN-POL-005#s2"
 
@@ -152,17 +154,21 @@ def retrieve_policy(state: RunState, ctx: NodeContext) -> None:
     started_as_of = _now(ctx)
     retriever = ctx.deps.retriever
     sections: dict[str, dict[str, Any]] = {}
-    for item in load_rules().values():
-        for citation in item.citations:
-            section = retriever.fetch_by_id(citation, AGENT_ROLE, started_as_of)  # denial fails the run
-            if section is None:  # missing or not in force: the run must not continue on partial policy
-                raise LookupError(f"rule source unavailable: {citation}")
-            sections[section.citation] = {
-                "citation": section.citation,
-                "doc_id": section.doc_id,
-                "trust_class": str(section.trust_class),
-                "text": section.text,
-            }
+    restricted: set[str] = set()
+    rule_citations = [citation for item in load_rules().values() for citation in item.citations]
+    for citation in dict.fromkeys((OUTCOME_CITATION, *rule_citations)):
+        section = retriever.fetch_by_id(citation, AGENT_ROLE, started_as_of)  # denial fails the run
+        if section is None:  # missing or not in force: the run must not continue on partial policy
+            raise LookupError(f"rule source unavailable: {citation}")
+        if section.restricted and section.doc_id not in restricted:
+            restricted.add(section.doc_id)
+            ctx.deps.audit(state.run_id, "restricted_access", "ok", doc_id=section.doc_id, role=AGENT_ROLE)
+        sections[section.citation] = {
+            "citation": section.citation,
+            "doc_id": section.doc_id,
+            "trust_class": str(section.trust_class),
+            "text": section.text,
+        }
     state.policy_sections = list(sections.values())
     case = _case(state, ctx)
     filters = RetrievalFilters(case_id=state.case_id, po_ref=(state.po or {}).get("po_ref"))
@@ -195,6 +201,10 @@ def _invoice_is_blocked(state: RunState, ctx: NodeContext) -> bool:
 
 def evaluate_case(state: RunState, ctx: NodeContext) -> None:
     if state.refresh:  # after an invalidated approval, decide again on fresh data
+        fetch_invoice(state, ctx)
+        state.po = None
+        if (state.invoice or {}).get("po_ref"):
+            fetch_po(state, ctx)
         _read_vendor(state, ctx)
         _read_history(state, ctx)
         _read_authority(state, ctx)
@@ -289,14 +299,15 @@ def _use_template_rationale(state: RunState) -> None:
 
 
 def _use_model_rationale(state: RunState, claims: list[dict[str, Any]]) -> None:
-    state.rationale_source = "LLM"
+    source = "FAKE" if state.model_id == FAKE_MODEL else "LLM"  # a stand-in is never labelled a real model
+    state.rationale_source = source
     state.sections["inferences"] = [
         Inference(
             id=f"INF-{index}",
             statement=claim["text"],
             basis_ids=tuple(dict.fromkeys((*claim["citation_ids"], *claim["number_refs"])))
-            or _template_basis(state),
-            source="LLM",
+            or (NO_SOURCE_CITED,),  # never borrow the decision's rule IDs for a claim that cited nothing
+            source=source,
         ).model_dump(mode="json")
         for index, claim in enumerate(claims, 1)
     ]
@@ -428,6 +439,13 @@ def place_block(state: RunState, ctx: NodeContext) -> None:
 
 def _decision_payload(state: RunState, ctx: NodeContext, action: str) -> DecisionPayload:
     invoice = state.invoice or {}
+    po = state.po or {}
+    received: dict[str, int] = {}
+    for receipt in po.get("receipts", []):
+        received[receipt["po_line_ref"]] = received.get(receipt["po_line_ref"], 0) + receipt["qty"]
+    amount = invoice.get("gross") or state.request["amount"]
+    po_total = (po.get("totals") or {}).get("incl_tax")
+    commitment = max(Decimal(str(amount)), Decimal(str(po_total))) if po_total else Decimal(str(amount))
     lines: dict[str, int] = {}
     for line in invoice.get("lines", []):
         if line.get("po_line_ref") and line["qty"] > 0:
@@ -442,14 +460,24 @@ def _decision_payload(state: RunState, ctx: NodeContext, action: str) -> Decisio
         po_ref=invoice.get("po_ref"),
         outcome=state.outcome,
         hold_category=state.primary_category,
-        line_quantities=[{"po_line_ref": ref, "qty": qty} for ref, qty in lines.items()],
+        line_quantities=[
+            {"po_line_ref": ref, "qty": qty, "received": received.get(ref, 0) if po else None}
+            for ref, qty in lines.items()
+        ],
+        commitment=commitment,
     )
 
 
 def request_approval(state: RunState, ctx: NodeContext) -> None:
     action = ACTION_FOR_OUTCOME[Outcome(state.outcome)]
     po = state.po or {}
-    receipters = tuple(dict.fromkeys(item["receipter"] for item in po.get("receipts", [])))
+    people = [
+        name
+        for item in po.get("receipts", [])
+        for name in (item["receipter"], item.get("service_confirmed_by"))
+        if name
+    ]
+    receipters = tuple(dict.fromkeys(people))
     vendor_name = (state.vendor or {}).get("legal_name") or "unknown vendor"
     record = ctx.deps.approvals.create_request(
         ApprovalRequest(

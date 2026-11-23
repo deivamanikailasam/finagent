@@ -18,10 +18,10 @@ fmt:
 	uv run ruff format .
 
 ingest:
-	uv run finagent ingest
+	@FINAGENT_HMAC_KEY='$(FINAGENT_HMAC_KEY)' uv run finagent ingest
 
 eval:
-	uv run finagent eval
+	@FINAGENT_HMAC_KEY='$(FINAGENT_HMAC_KEY)' uv run finagent eval
 
 scenarios:
 	uv run pytest -m scenarios -q

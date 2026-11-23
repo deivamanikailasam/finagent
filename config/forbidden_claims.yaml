@@ -3,9 +3,11 @@ patterns:
   - intent: status_claim
     regex: '\b(verified|approved|authori[sz]ed|cleared)\b'
   - intent: safe_to_pay
-    regex: '\b(safe|fine|ok|okay)\s+to\s+(pay|post|release)\b'
+    regex: '\b(safe|fine|ok|okay|good|clear)\s+to\s+(pay|post|release|proceed)\b'
   - intent: payment_can_proceed
-    regex: '\bpayment\b.{0,30}\b(can|may|should|could)\s+(now\s+)?(go\s+ahead|proceed)\b'
+    regex: '\bpayment\b.{0,30}\b(can|may|should|could)\s+(now\s+)?(go\s+ahead|proceed)\b|\bproceed\b.{0,20}\bpayment\b'
+  - intent: pay_instruction
+    regex: '\bpay\s+(this|the)\s+(invoice|supplier|vendor|amount)\b'
   - intent: release_payment
     regex: '\brelease\b.{0,20}\bpayment\b|\bpayment\b.{0,15}\breleased?\b'
   - intent: fraud_word
@@ -19,3 +21,10 @@ allowed_contexts:
   - approval is required
   - awaiting approval
   - Financial Crime and Controls
+  - FRAUD-INDICATORS
+  - approved PO
+
+# True statements about a purchase order's status, and instructions not to pay.
+allowed_patterns:
+  - '\bpo(?:-[a-z0-9]+)?(?:\s+status)?\s+(?:is|was|remains)\s+approved\b'
+  - '\b(?:do|does|must|should|will)\s+not\s+release\b.{0,20}\bpayment\b'

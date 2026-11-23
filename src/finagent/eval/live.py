@@ -28,7 +28,6 @@ LIVE_CASES = ("FIN-001", "FIN-003")
 CONFIGS = frozenset({"template", "haiku"})
 LIVE_LABEL = "live model"
 RESULTS_PATH = ROOT / "docs" / "EVAL_RESULTS.md"
-_BAD_STOPS = frozenset({"max_tokens", "refusal"})
 
 Prepared = tuple[RationaleInput, Sequence[PromptChunk]]
 
@@ -104,7 +103,12 @@ def _run_one(
     for hop, reply in enumerate(replies, 1):
         store_raw(raw_dir / f"{case_id}-{name}-{hop}.txt", reply.raw_text)
     shown = " ".join(claim.text for claim in result.rationale.claims)
-    raw_texts = [reply.raw_text for reply in replies] or [shown]
+    # The gate reads what the model said: its parsed claims, or the raw text when it did not parse.
+    said = [
+        " ".join(claim.text for claim in reply.parsed.claims) if reply.parsed else reply.raw_text
+        for reply in replies
+    ] or [shown]
+    measured = recorder is None or bool(replies)  # a total provider failure is not a clean result
     covered, total = exception_coverage(evaluation, shown)
     latencies = recorder.latencies_ms if recorder else []
     return {
@@ -113,8 +117,11 @@ def _run_one(
         "source": result.source,
         "model_calls": result.calls,
         "first_try_valid": result.source == "LLM" and result.calls == 1,
-        "raw_forbidden_claim": any(has_forbidden_claim(text) for text in raw_texts),  # before validation
-        "truncated_or_refused": any(reply.stop_reason in _BAD_STOPS for reply in replies),
+        "measured": measured,
+        "raw_forbidden_claim": any(has_forbidden_claim(text) for text in said) if measured else None,
+        "truncated_or_refused": (
+            any(reply.stop_reason != "end_turn" for reply in replies) if measured else None
+        ),
         "stop_reasons": result.stop_reasons,
         "exceptions_covered": covered,
         "exceptions_total": total,
@@ -122,6 +129,10 @@ def _run_one(
         "latency_ms": latencies,
         "manual_read": "",
     }
+
+
+def _gate(row: dict[str, Any], key: str) -> str:
+    return "not measured" if row[key] is None else str(row[key])
 
 
 def render_model_section(rows: Sequence[dict[str, Any]], generated_at: datetime) -> str:
@@ -145,7 +156,7 @@ def render_model_section(rows: Sequence[dict[str, Any]], generated_at: datetime)
     for row in rows:
         lines.append(
             f"| {row['case_id']} | {row['config']} | {row['source']} | {row['first_try_valid']} "
-            f"| {row['raw_forbidden_claim']} | {row['truncated_or_refused']} "
+            f"| {_gate(row, 'raw_forbidden_claim')} | {_gate(row, 'truncated_or_refused')} "
             f"| {row['exceptions_covered']}/{row['exceptions_total']} | {row['input_tokens']} "
             f"| {row['output_tokens']} | {row['cost_usd']} | {row['manual_read']} |"
         )

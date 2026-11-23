@@ -13,7 +13,7 @@ from fixtures.builder import build_case
 from tests.acceptance.support_graph import run_case
 
 
-def evaluation(case_id="FIN-004"):
+def evaluation(case_id="FIN-001"):
     case = build_case(case_id)
     return RationaleInput.from_evaluation(evaluate(case, FixedClock(case.as_of)))
 
@@ -34,7 +34,7 @@ def test_malformed_then_good_needs_two_calls_and_passes_the_error():
 
 def test_two_malformed_replies_use_the_template_and_keep_the_outcome():
     llm = FakeLLM(["malformed", "malformed"])
-    item = evaluation()
+    item = evaluation("FIN-004")
     before = asdict(item)
     result = Router(llm, "llm").rationale(item)
     assert (result.source, llm.calls) == ("TEMPLATE", 2)
@@ -73,7 +73,7 @@ def test_provider_failure_goes_straight_to_the_template():
 
 
 def test_template_mentions_every_exception_and_unknown():
-    item = evaluation()
+    item = evaluation("FIN-004")
     text = " ".join(
         claim.text for claim in Router(FakeLLM("good"), "template").rationale(item).rationale.claims
     )

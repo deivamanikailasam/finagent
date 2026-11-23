@@ -103,7 +103,9 @@ class AnthropicLLM:
         if client is None:
             key = load_settings().anthropic_api_key
             client = anthropic.Anthropic(
-                api_key=key.get_secret_value() if key else None, timeout=config.timeout_s
+                api_key=key.get_secret_value() if key else None,
+                timeout=config.timeout_s,
+                max_retries=0,  # the router's single repair is the only retry, and it is audited
             )
         self._client = client
 

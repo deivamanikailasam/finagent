@@ -16,6 +16,7 @@ from finagent.tools.block_submit import (
     Audit,
     place_payment_block,
     submit_finance_decision,
+    write_deadline,
 )
 from finagent.tools.declarations import ToolsConfig
 from finagent.tools.mocks.case_tools import (
@@ -34,6 +35,7 @@ from finagent.tools.schemas import (
 )
 
 FAULT_MODES = frozenset({"ok", "timeout_always", "fail_once_503"})
+WRITE_DEADLINE_FRACTION = 0.9  # the write gives up before the caller's deadline, so it cannot commit late
 
 
 class FaultGate:
@@ -82,12 +84,17 @@ def build_tools(
             request.query, request.filters, request.principal_role, request.as_of
         )
 
+    timeouts = {tool.name: tool.timeout_s * WRITE_DEADLINE_FRACTION for tool in config.tools}
+
     def block(request: PlacePaymentBlockInput) -> Any:
-        with sandbox_connection(sandbox_path) as write_conn:
+        with write_deadline(timeouts["place_payment_block"]), sandbox_connection(sandbox_path) as write_conn:
             return place_payment_block(write_conn, request, clock, audit=audit)
 
     def submit(request: SubmitFinanceDecisionInput) -> Any:
-        with sandbox_connection(sandbox_path) as write_conn:
+        with (
+            write_deadline(timeouts["submit_finance_decision"]),
+            sandbox_connection(sandbox_path) as write_conn,
+        ):
             return submit_finance_decision(write_conn, request, approvals, clock, audit=audit)
 
     implementations: dict[tuple[str, str], Callable[[Any], Any]] = {

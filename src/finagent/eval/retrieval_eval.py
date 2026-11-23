@@ -330,8 +330,6 @@ def run_retrieval_eval(root: Path = Path(".")) -> EvalReport:
     case = load_case(root / "fixtures/cases/FIN-001")
     report = evaluate(default_retriever(root), rules, queries, case)
     write_section(root / "docs/EVAL_RESULTS.md", render_report(report))
-    settings = {"use_prefix": USE_PREFIX, "k": dict(LANE_K)}
-    (root / "config/retrieval.yaml").write_text(yaml.safe_dump(settings, sort_keys=False), encoding="utf-8")
     return report
 
 
