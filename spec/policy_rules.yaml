@@ -1,4 +1,8 @@
 # Translated from decision log III. Money is quoted so it loads as an exact string.
+owner_tie_break: >-
+  When failing rules in the winning category have different owners, the owner comes from the first
+  failing rule in this file's order, which is the order of decision log III. A FRAUD-INDICATORS
+  escalation is always owned by Financial Crime and Controls.
 rules:
   - id: INV-HEADER
     source:

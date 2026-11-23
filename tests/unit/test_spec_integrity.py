@@ -159,6 +159,20 @@ def test_block_reconciliation_never_skips_approval():
     assert edges[("SUBMIT_UNKNOWN", "block_no_row_retry")] == "PLACE_BLOCK"
 
 
+def test_post_and_reject_retries_revalidate_first():
+    edges = {(e["from"], e["when"]): e["to"] for e in graph()["transitions"]}
+    assert edges[("SUBMIT_UNKNOWN", "submit_no_row_retry_post_or_reject")] == "REVALIDATE"
+    assert edges[("SUBMIT_UNKNOWN", "submit_no_row_retry_hold_or_escalate")] == "SUBMIT"
+    assert ("SUBMIT_UNKNOWN", "submit_no_row_retry") not in edges
+
+
+def test_owner_tie_break_is_declared():
+    spec = load("spec/policy_rules.yaml")
+    assert "first failing rule" in spec["owner_tie_break"]
+    ids = [rule["id"] for rule in spec["rules"]]
+    assert ids.index("QTY-RECEIVED") < ids.index("QTY-CUMULATIVE")
+
+
 def test_blocked_invoice_can_never_post():
     spec = permissions()
     assert spec["tools"]["submit_finance_decision"]["actions"]["POST"]["blocked_invoice"] == "DENY"

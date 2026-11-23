@@ -197,9 +197,20 @@ class BlockPayload(DomainModel):
     invoice_no_norm: str = Field(min_length=1)
 
 
+class LineQuantity(DomainModel):
+    po_line_ref: str = Field(min_length=1)
+    qty: Quantity
+
+
 class DecisionPayload(BlockPayload):
     amount: Money
     currency: Currency
+    # Stored on the ledger, so later runs can rebuild sticky outcomes and cumulative quantities.
+    invoice_date: date
+    po_ref: str | None = None
+    outcome: Outcome
+    hold_category: ExceptionCategory | None = None
+    line_quantities: tuple[LineQuantity, ...] = ()
 
 
 def payload_hash_of(payload: DomainModel) -> str:

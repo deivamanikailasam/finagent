@@ -129,7 +129,10 @@ transitions:
   when: submit_row_found
   to: COMPLETE
 - from: SUBMIT_UNKNOWN
-  when: submit_no_row_retry
+  when: submit_no_row_retry_post_or_reject
+  to: REVALIDATE
+- from: SUBMIT_UNKNOWN
+  when: submit_no_row_retry_hold_or_escalate
   to: SUBMIT
 - from: SUBMIT_UNKNOWN
   when: block_row_found

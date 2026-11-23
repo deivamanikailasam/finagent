@@ -326,6 +326,10 @@ def payload(**overrides):
         "invoice_no_norm": "inv1001",
         "amount": "9900.00",
         "currency": "AUD",
+        "invoice_date": "2026-09-01",
+        "po_ref": "PO-4471",
+        "outcome": "APPROVE_FOR_POSTING",
+        "line_quantities": [{"po_line_ref": "PO-L1", "qty": 40}, {"po_line_ref": "PO-L2", "qty": 100}],
     }
     return {**fields, **overrides}
 
