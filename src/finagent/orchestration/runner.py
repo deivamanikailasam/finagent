@@ -20,7 +20,7 @@ from finagent.orchestration.checkpoint import fingerprints, restore
 from finagent.orchestration.graph import PAUSE_NODES, PAUSED, TERMINAL, RunState, next_node
 from finagent.orchestration.nodes import HANDLERS, NodeContext, build_result
 from finagent.persistence.db import connect, migrate, transaction
-from finagent.persistence.repos import AuditRepo, CheckpointRepo, RunRepo
+from finagent.persistence.repos import ApprovalRepo, AuditRepo, CheckpointRepo, RunRepo
 from finagent.rag.loader import load_verified
 from finagent.rag.retrieve import Retriever, load_case_documents
 from finagent.tools.block_submit import ApprovalView
@@ -56,11 +56,15 @@ class RunView:
 class _ApprovalLookup:
     """The submit tool's read-only view of approvals."""
 
-    def __init__(self) -> None:
-        self.service: ApprovalService | None = None
+    def __init__(self, app_db: Path) -> None:
+        self._app_db = app_db
 
     def get(self, approval_id: str) -> ApprovalView | None:
-        record = self.service.get(approval_id)
+        conn = connect(self._app_db)  # tools run on worker threads, and a connection stays on its own
+        try:
+            record = ApprovalRepo(conn).get(approval_id)
+        finally:
+            conn.close()
         if record is None:
             return None
         return ApprovalView(
@@ -85,6 +89,7 @@ class RunDeps:
     max_steps: int
     crash_hook: Callable[[str], None] | None
     model_config: ModelConfig
+    request: dict[str, Any]
 
     def write_audit(self, event: dict[str, Any]) -> None:
         """A fresh connection per event, because tools can report from worker threads."""
@@ -115,6 +120,7 @@ def build_deps(
     max_steps: int | None = None,
     executor: Executor | None = None,
     crash_hook: Callable[[str], None] | None = None,
+    request: dict[str, Any] | None = None,
 ) -> RunDeps:
     case_dir, home = Path(case_dir), Path(home)
     home.mkdir(parents=True, exist_ok=True)
@@ -124,7 +130,7 @@ def build_deps(
     config = load_tool_declarations(ROOT / "config/tools.yaml")
     result = load_verified(ROOT / "corpus", ROOT / "config/registry.yaml", home / "index_manifest.json")
     retriever = Retriever(result, load_case_documents(case_dir.parent))
-    lookup = _ApprovalLookup()
+    lookup = _ApprovalLookup(app_db)
     audit_sink: list[Callable[[dict[str, Any]], None]] = []
 
     def forward(event: dict[str, Any]) -> None:
@@ -134,8 +140,8 @@ def build_deps(
         case_dir, sandbox_db, config, retriever, lookup, clock, load_settings().hmac_key, audit=forward
     )
     case_id = case_dir.name
-    request = json.loads((case_dir / "request.json").read_text(encoding="utf-8"))
-    vendor_id = request["vendor_id"]
+    run_request = request or json.loads((case_dir / "request.json").read_text(encoding="utf-8"))
+    vendor_id = run_request["vendor_id"]
     approvals = ApprovalService(
         conn,
         clock,
@@ -147,7 +153,6 @@ def build_deps(
             ).records
         ),
     )
-    lookup.service = approvals
     deps = RunDeps(
         case_dir=case_dir,
         home=home,
@@ -164,6 +169,7 @@ def build_deps(
         max_steps=config.budget.max_steps if max_steps is None else max_steps,
         crash_hook=crash_hook,
         model_config=load_model_config(ROOT / "config/model.yaml"),
+        request=run_request,
     )
     audit_sink.append(deps.write_audit)
     return deps
@@ -187,7 +193,7 @@ class Runner:
         def read(name: str) -> Any:
             return json.loads((deps.case_dir / f"{name}.json").read_text(encoding="utf-8"))
 
-        request = ProcessingRequest.model_validate(read("request"))  # invalid input never becomes a run
+        request = ProcessingRequest.model_validate(deps.request)  # invalid input never becomes a run
         run_id = str(uuid.uuid4())
         now = deps.clock.now_utc()
         self._runs.create(run_id, request.case_id, RunStatus.RUNNING, "VALIDATE", now, now)
@@ -195,6 +201,7 @@ class Runner:
         state = RunState(
             run_id=run_id,
             case_id=request.case_id,
+            case_dir=str(deps.case_dir.resolve()),
             request=request.model_dump(mode="json"),
             evidence=read("evidence"),
             corpus_hash=corpus_hash,

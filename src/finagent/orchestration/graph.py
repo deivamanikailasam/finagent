@@ -25,6 +25,7 @@ class RunState:
     signal: str | None = None
     node: str = "VALIDATE"
     case_id: str = ""
+    case_dir: str = ""
     visited: list[str] = field(default_factory=list)
     request: dict[str, Any] = field(default_factory=dict)
     evidence: dict[str, Any] = field(default_factory=dict)
