@@ -350,3 +350,81 @@ def test_fraud_escalation_survives_a_resume_that_re_evaluates():
     report = run_case("FIN-003", decision={"action": "approve", "approver": "fc-01"})
     assert report.outcome == "ESCALATE_CONTROL_REVIEW"
     assert counts(report)["ledger"] == {"ESCALATE": 1}
+
+
+def test_one_transient_read_during_revalidation_is_retried():
+    home = make_workspace()
+    paused = start(home=home)
+    paused.deps.approvals.decide(paused.pending_approval, "cc-manager-01", "approve")
+    real, state = paused.deps.tools["get_vendor_record"], {"failed": False}
+
+    def flaky(request):
+        if not state["failed"]:
+            state["failed"] = True
+            raise ConnectionError
+        return real(request)
+
+    paused.deps.tools["get_vendor_record"] = flaky
+    assert paused.runner.resume(paused.run_id).status == "COMPLETE"
+
+
+def test_notes_and_rejection_reasons_are_stored_redacted(tmp_path):
+    case = tmp_path / "cases" / "FIN-001"
+    shutil.copytree(ROOT / "fixtures/cases/FIN-001", case)
+    request = json.loads((case / "request.json").read_text(encoding="utf-8"))
+    request["notes"] = "account 123456789, contact ap@example.test"
+    (case / "request.json").write_text(json.dumps(request), encoding="utf-8")
+    home = tmp_path / "home"
+    service = RunService(home, FakeLLM)
+    run_id = service.start(StartCommand(case_dir=case)).run_id
+    service.reject(DecisionCommand(run_id=run_id, approver="cc-manager-01", reason="acct 987654321"))
+    conn = connect(home / "finagent.db")
+    try:
+        stored = " ".join(row[0] for row in conn.execute("SELECT state_json FROM checkpoints"))
+        reason = conn.execute("SELECT reason FROM approvals").fetchone()[0]
+    finally:
+        conn.close()
+    assert "123456789" not in stored and "ap@example.test" not in stored
+    assert "987654321" not in reason
+
+
+def test_retrieval_runs_through_the_tool_contract_and_is_audited():
+    report = run_case("FIN-001")
+    assert report.tool_attempts["retrieve_finance_documents"] >= 1
+    events = [item for item in report.audit if item["event"] == "retrieval_query"]
+    assert events and all(item["run_id"] == report.run_id and item["duration_ms"] > 0 for item in events)
+
+
+def test_failed_retrieval_fails_the_run_safely(monkeypatch):
+    from finagent.rag.retrieve import Retriever
+
+    def down(*_args, **_kwargs):
+        raise ConnectionError
+
+    monkeypatch.setattr(Retriever, "retrieve_finance_documents", down)
+    report = run_case("FIN-001")
+    assert report.status == "FAILED"
+    assert counts(report) == {"block": 0, "ledger": {}}
+
+
+def test_audit_records_real_time_beside_business_time():
+    report = run_case("FIN-001")
+    assert all(item["recorded_at"] > item["ts"] for item in report.audit)
+
+
+def _pending(report):
+    return report.runner.view(report.run_id).pending_approval_id
+
+
+def test_two_re_evaluations_stay_within_the_tool_budget():
+    home = make_workspace("FIN-002")
+    paused = start("FIN-002", home=home)
+    path = home / "cases" / "FIN-002" / "history.json"
+    for number in (1, 2):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        records = data["records"] if isinstance(data, dict) else data
+        records.append({**records[0], "record_id": f"H-900{number}"})
+        path.write_text(json.dumps(data), encoding="utf-8")
+        paused.deps.approvals.decide(_pending(paused), "cc-manager-01", "approve")
+        view = paused.runner.resume(paused.run_id)
+        assert view.status == "AWAITING_APPROVAL"

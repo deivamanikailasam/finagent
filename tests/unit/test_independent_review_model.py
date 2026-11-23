@@ -208,3 +208,26 @@ def test_real_model_needs_explicit_opt_in_and_a_key(tmp_path, monkeypatch):
     result = CliRunner().invoke(app, ["run", "start", "--case", case, "--json"])
     assert result.exit_code == 2
     assert "ANTHROPIC_API_KEY" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["An authorised approver must review this.", "Do not pay this invoice.", "Do not release the payment."],
+)
+def test_ordinary_control_wording_is_allowed(text):
+    assert not has_forbidden_claim(text)
+
+
+def test_case_ids_are_not_amounts():
+    assert "number_binding" not in codes("Case FIN-001 matches.")
+
+
+def test_the_receipt_note_is_citable_but_a_supplier_attachment_is_not():
+    allowed = allowed_citations(item("FIN-001"), ())
+    assert "CASE:goods_receipt_note" in allowed
+    assert "CASE:supplier_attachment" not in allowed_citations(item("FIN-003"), ())
+
+
+def test_repair_errors_name_the_missing_exception():
+    errors = validate(Rationale(claims=(Claim(text="Review needed."),)), item("FIN-004"))
+    assert any("RECEIPT-REQUIRED" in str(error) for error in errors)

@@ -56,6 +56,7 @@ def _service() -> RunService:
         settings = load_settings()
     except SettingsError as exc:
         raise _fail(str(exc)) from None
+    typer.echo(f"model mode: {settings.llm}", err=True)
     if settings.llm == "fake":
         return RunService(settings.home)
     if settings.anthropic_api_key is None:
@@ -210,10 +211,15 @@ def _run_live(configs: str) -> None:
 
 
 @eval_app.command("list")
-def eval_list(compact: JsonFlag = False) -> None:
-    """List the stored evaluation runs with per-case results."""
+def eval_list(
+    run: Annotated[bool, typer.Option("--run", help="Run the offline cases first.")] = False,
+    compact: JsonFlag = False,
+) -> None:
+    """List the stored evaluation runs with per-case pass/fail results."""
     try:
         home = load_settings().home
     except SettingsError as exc:
         raise _fail(str(exc)) from None
+    if run:
+        run_offline(home, datetime.now(UTC))
     _emit({"runs": list_runs(home)}, compact)

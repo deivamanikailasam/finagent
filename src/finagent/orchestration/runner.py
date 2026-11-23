@@ -16,6 +16,7 @@ from finagent.domain.requests import ProcessingRequest
 from finagent.domain.results import FinalResult
 from finagent.llm.anthropic_adapter import ModelConfig, load_model_config
 from finagent.llm.client import LLMClient
+from finagent.obs.log import run_context
 from finagent.orchestration.checkpoint import fingerprints, rehydrate, restore
 from finagent.orchestration.graph import PAUSE_NODES, PAUSED, TERMINAL, RunState, next_node
 from finagent.orchestration.nodes import HANDLERS, NodeContext, build_result
@@ -27,7 +28,14 @@ from finagent.rag.retrieve import Retriever, load_case_documents
 from finagent.tools.block_submit import ApprovalView, derive_key
 from finagent.tools.declarations import ToolsConfig, load_tool_declarations
 from finagent.tools.factory import build_tools
-from finagent.tools.runner import BudgetExceeded, Executor, RunContext, ThreadExecutor, ToolRunner
+from finagent.tools.runner import (
+    BudgetExceeded,
+    Executor,
+    RunContext,
+    ThreadExecutor,
+    ToolRunner,
+    fault_kind,
+)
 from finagent.tools.schemas import (
     CheckInvoiceHistoryInput,
     GetAuthorityRecordInput,
@@ -146,11 +154,19 @@ def build_deps(
     run_request = request or json.loads((case_dir / "request.json").read_text(encoding="utf-8"))
     vendor_id = run_request["vendor_id"]
     run_executor = executor or ThreadExecutor()
-    deadlines = {tool.name: tool.timeout_s for tool in config.tools}
+    declared = {tool.name: tool for tool in config.tools}
 
     def bounded(name: str, request: Any) -> Any:
-        """Approval-path reads keep the tool's declared deadline, so a hung read cannot stall a decision."""
-        return run_executor.run(lambda: tools[name](request), deadlines[name], lambda _late: None)
+        """Approval-path reads keep the tool's deadline and retries, so one blip cannot block an invoice."""
+        tool, backoff = declared[name], config.backoff
+        for attempt in range(1, tool.max_attempts + 1):
+            try:
+                return run_executor.run(lambda: tools[name](request), tool.timeout_s, lambda _late: None)
+            except Exception as exc:
+                if fault_kind(exc) not in tool.retry_on or attempt == tool.max_attempts:
+                    raise
+                run_executor.sleep(min(backoff.base_s * backoff.multiplier ** (attempt - 1), backoff.max_s))
+        raise RuntimeError("unreachable: a tool has at least one attempt")  # pragma: no cover
 
     def optional(name: str, request: Any) -> Any:
         try:
@@ -332,6 +348,13 @@ class Runner:
             return RunStatus.AWAITING_APPROVAL
         return RunStatus.RUNNING
 
+    def _pending_approval(self, state: RunState, status: RunStatus) -> str | None:
+        """Only a request that is still pending can be offered for a decision."""
+        if status != RunStatus.AWAITING_APPROVAL or state.approval_id is None:
+            return None
+        record = self.deps.approvals.get(state.approval_id)
+        return state.approval_id if record is not None and record.status == "PENDING" else None
+
     def _view(self, state: RunState) -> RunView:
         status = self._status(state)
         return RunView(
@@ -342,14 +365,15 @@ class Runner:
             primary_category=state.primary_category,
             visited=tuple(state.visited),
             result=build_result(state),
-            pending_approval_id=state.approval_id if status == RunStatus.AWAITING_APPROVAL else None,
+            pending_approval_id=self._pending_approval(state, status),
         )
 
     def _step(self, node: str, state: RunState, context: NodeContext) -> None:
         started = time.perf_counter()
         state.visited.append(node)
         try:
-            HANDLERS[node](state, context)
+            with run_context(state.run_id):
+                HANDLERS[node](state, context)
         except BudgetExceeded:
             state.signal = "budget_exhausted"
         except Exception as exc:  # an unexpected error fails safe: nothing further is written

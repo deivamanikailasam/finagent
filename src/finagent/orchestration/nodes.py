@@ -1,5 +1,6 @@
 """One function per graph node. Each reads and updates RunState and sets state.signal."""
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal
@@ -150,7 +151,6 @@ def fetch_po(state: RunState, ctx: NodeContext) -> None:
 
 def retrieve_policy(state: RunState, ctx: NodeContext) -> None:
     """Fetch rule sources by ID and run the templated queries, as one budgeted tool invocation."""
-    ctx.tools.charge()
     started_as_of = _now(ctx)
     retriever = ctx.deps.retriever
     sections: dict[str, dict[str, Any]] = {}
@@ -174,16 +174,39 @@ def retrieve_policy(state: RunState, ctx: NodeContext) -> None:
     filters = RetrievalFilters(case_id=state.case_id, po_ref=(state.po or {}).get("po_ref"))
     receipt_missing = state.po is None or not state.po["receipts"]
     retrieved: dict[str, dict[str, Any]] = {}
-    for check, template in TEMPLATES.items():
-        if check == RECEIPT_CHECK and not receipt_missing:
-            continue
-        output = retriever.retrieve_finance_documents(template(case), filters, AGENT_ROLE, started_as_of)
-        if check == RECEIPT_CHECK:
-            abstained = output.abstained["case_evidence"]
-            ctx.deps.audit(state.run_id, "receipt_evidence_query", "abstained" if abstained else "found")
-        for lane in ("case_evidence", "non_authoritative"):
-            for chunk in output.lanes[lane]:
-                retrieved[chunk.citation] = chunk.model_dump(mode="json")
+    with ctx.tools.one_invocation():
+        for check, template in TEMPLATES.items():
+            if check == RECEIPT_CHECK and not receipt_missing:
+                continue
+            started = time.perf_counter()
+            args = {
+                "query": template(case),
+                "filters": filters,
+                "principal_role": AGENT_ROLE,
+                "as_of": started_as_of,
+            }
+            result = ctx.tools.call("retrieve_finance_documents", args)
+            if (
+                result.status != "ok"
+            ):  # risk signals come from here, so the run must not continue without them
+                raise LookupError(f"retrieval failed: {check}")
+            output = result.value
+            ctx.deps.audit(
+                state.run_id,
+                "retrieval_query",
+                "ok",
+                check=check,
+                authoritative_count=len(output.lanes["authoritative"]),
+                case_evidence_count=len(output.lanes["case_evidence"]),
+                non_authoritative_count=len(output.lanes["non_authoritative"]),
+                duration_ms=(time.perf_counter() - started) * 1000,
+            )
+            if check == RECEIPT_CHECK:
+                abstained = output.abstained["case_evidence"]
+                ctx.deps.audit(state.run_id, "receipt_evidence_query", "abstained" if abstained else "found")
+            for lane in ("case_evidence", "non_authoritative"):
+                for chunk in output.lanes[lane]:
+                    retrieved[chunk.citation] = chunk.model_dump(mode="json")
     state.retrieved = list(retrieved.values())
     state.signal = "done"
 
@@ -201,13 +224,14 @@ def _invoice_is_blocked(state: RunState, ctx: NodeContext) -> bool:
 
 def evaluate_case(state: RunState, ctx: NodeContext) -> None:
     if state.refresh:  # after an invalidated approval, decide again on fresh data
-        fetch_invoice(state, ctx)
-        state.po = None
-        if (state.invoice or {}).get("po_ref"):
-            fetch_po(state, ctx)
-        _read_vendor(state, ctx)
-        _read_history(state, ctx)
-        _read_authority(state, ctx)
+        with ctx.tools.one_invocation():  # one refresh is one budget unit, so re-evaluation cannot exhaust it
+            fetch_invoice(state, ctx)
+            state.po = None
+            if (state.invoice or {}).get("po_ref"):
+                fetch_po(state, ctx)
+            _read_vendor(state, ctx)
+            _read_history(state, ctx)
+            _read_authority(state, ctx)
         state.refresh = False
     result = evaluate(_case(state, ctx), ctx.deps.clock, invoice_blocked=_invoice_is_blocked(state, ctx))
     state.outcome = str(result.outcome)
@@ -408,7 +432,9 @@ def place_block(state: RunState, ctx: NodeContext) -> None:
             "idempotency_key": derive_key(state.run_id, authorisation_id, "BLOCK"),
         }
         try:
-            result = ctx.tools.call("place_payment_block", args)
+            # Repeating a block the run already holds is a no-op, so it must not spend the budget.
+            already_blocked = any(item["action"] == "BLOCK" for item in state.actions)
+            result = ctx.tools.call("place_payment_block", args, charged=not already_blocked)
         except WriteRefused:
             state.signal = "invariant_breach"
             return
@@ -437,7 +463,7 @@ def place_block(state: RunState, ctx: NodeContext) -> None:
     state.signal = BLOCK_SIGNALS[context]
 
 
-def _decision_payload(state: RunState, ctx: NodeContext, action: str) -> DecisionPayload:
+def _decision_payload(state: RunState, ctx: NodeContext) -> DecisionPayload:
     invoice = state.invoice or {}
     po = state.po or {}
     received: dict[str, int] = {}
@@ -484,7 +510,7 @@ def request_approval(state: RunState, ctx: NodeContext) -> None:
             run_id=state.run_id,
             case_id=state.case_id,
             action=action,
-            payload=_decision_payload(state, ctx, action),
+            payload=_decision_payload(state, ctx),
             vendor_id=state.request["vendor_id"],
             vendor_name=vendor_name,
             requester=po.get("requester") or "unknown",
@@ -639,7 +665,14 @@ def _facts(state: RunState) -> list[Fact]:
         facts.append(Fact(id="FACT-PO-TOTAL", value=str(state.po["totals"]["incl_tax"]), source_id=po_source))
         for index, receipt in enumerate(state.po["receipts"], 1):
             facts.append(Fact(id=f"FACT-RECEIPT-{index}", value=receipt["qty"], source_id=po_source))
+    cited = {
+        citation
+        for finding in state.sections.get("findings", ())
+        for citation in finding.get("citations", ())
+    }
     for record in state.history:
+        if f"HISTORY:{record['record_id']}" not in cited:  # unrelated invoices are not this case's facts
+            continue
         facts.append(
             Fact(
                 id=f"FACT-HISTORY-{record['record_id']}",

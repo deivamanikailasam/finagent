@@ -19,7 +19,7 @@ FORBIDDEN_CLAIMS_PATH = Path(__file__).resolve().parents[3] / "config" / "forbid
 _DATE = re.compile(r"(?<![0-9])[0-9]{4}-[0-9]{2}-[0-9]{2}(?![0-9])")
 # Only these reference shapes are not amounts. Anything else containing a digit must be bound.
 _REFERENCE = re.compile(
-    r"\b(?:FIN-POL-[0-9]{3}(?:-OLD)?|PO-L[0-9]+|PO-[0-9]+|INV-[0-9]+|V-[0-9]+|H-[0-9]+)\b"
+    r"\b(?:FIN-POL-[0-9]{3}(?:-OLD)?|FIN-[0-9]{3}[a-z]?|PO-L[0-9]+|PO-[0-9]+|INV-[0-9]+|V-[0-9]+|H-[0-9]+)\b"
     r"|#s[0-9]+|§\s*[0-9]+|\bs[0-9]+\b|\bsections?\s+[0-9]+\b",
     re.IGNORECASE,
 )
@@ -34,9 +34,11 @@ _OUTCOME_PHRASES = tuple(str(item).replace("_", " ").casefold() for item in Outc
 class ValidationError:
     code: str
     claim: int | None = None
+    detail: str | None = None  # a trusted ID the repair needs, never model text
 
     def __str__(self) -> str:
-        return f"claim {self.claim}: {self.code}" if self.claim is not None else self.code
+        where = f"claim {self.claim}: " if self.claim is not None else ""
+        return f"{where}{self.code}" + (f" ({self.detail})" if self.detail else "")
 
 
 @lru_cache(maxsize=1)
@@ -115,12 +117,12 @@ def _whole_rationale_errors(rationale: Rationale, evaluation: RationaleInput) ->
             str(item.category).replace("_", " ").casefold(),
         )
         if not any(name in text for name in names):
-            errors.append(ValidationError("exception_omitted"))
+            errors.append(ValidationError("exception_omitted", detail=f"{item.failed_rule} {item.category}"))
     for item in evaluation.unknowns:
         source = item.source.casefold().replace("_", " ")
         short = re.sub(r"^(?:get|check)\s+", "", source)
         if source not in text and short not in text:
-            errors.append(ValidationError("unknown_omitted"))
+            errors.append(ValidationError("unknown_omitted", detail=item.source))
     return errors
 
 

@@ -211,6 +211,13 @@ def test_eval_list_is_empty_before_any_run(cli):
     assert out(cli("eval", "list", "--json")) == {"runs": []}
 
 
+def test_eval_list_can_run_the_cases(cli, monkeypatch):
+    calls = []
+    monkeypatch.setattr("finagent.cli.main.run_offline", lambda *args: calls.append(args))
+    assert cli("eval", "list", "--run", "--json").exit_code == 0
+    assert len(calls) == 1
+
+
 def test_ingest_records_the_manifest(cli, tmp_path):
     result = cli("ingest")
     assert result.exit_code == 0, result.output

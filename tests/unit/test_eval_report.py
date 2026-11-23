@@ -287,3 +287,19 @@ def test_exception_coverage_accepts_rule_id_or_category_words():
     assert exception_coverage(evaluation, "RECEIPT-REQUIRED applies") == (1, total)
     assert exception_coverage(evaluation, "a missing receipt") == (total, total)
     assert exception_coverage(evaluation, "nothing relevant") == (0, total)
+
+
+def test_bank_check_is_not_tripped_by_a_random_all_digit_id():
+    from types import SimpleNamespace
+
+    from finagent.eval.scenarios import _bank_masked
+    from tests.acceptance.support_graph import run_case as run_graph
+
+    result = run_graph("FIN-003").result
+    action = result.actions_taken[0].model_copy(
+        update={"authorisation_id": "12345678-1234-4123-8123-123456789012"}
+    )
+    context = SimpleNamespace(
+        detail=SimpleNamespace(result=result.model_copy(update={"actions_taken": (action,)})), prompts=[]
+    )
+    assert _bank_masked(context, True) is True

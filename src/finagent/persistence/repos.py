@@ -7,6 +7,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
+from finagent.config.clock import SystemClock
 from finagent.obs.redaction import redact
 
 _AUDIT_COLUMNS = {"ts", "run_id", "event", "outcome", "duration_ms"}
@@ -108,6 +109,8 @@ class AuditRepo:
     def append(self, event: dict[str, Any]) -> None:
         """Store one event. Fields beyond the required five are redacted before they are written."""
         detail = {key: value for key, value in event.items() if key not in _AUDIT_COLUMNS}
+        # ts is the case's business time; this is when the event really happened.
+        detail["recorded_at"] = SystemClock().now_utc().isoformat()
         self._conn.execute(
             "INSERT INTO audit (ts, run_id, event, outcome, duration_ms, detail_json) "
             "VALUES (?, ?, ?, ?, ?, ?)",

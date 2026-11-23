@@ -1,7 +1,7 @@
 # GNU Make 3.81 compatible: no .ONESHELL, no !=
 FINAGENT_HMAC_KEY ?= 0000000000000000000000000000000000000000000000000000000000000000
 
-.PHONY: install test lint fmt ingest eval scenarios test-llm run-dev schema
+.PHONY: install test lint fmt ingest eval scenarios test-llm run-dev run-live schema
 
 install:
 	uv sync --locked
@@ -31,6 +31,9 @@ test-llm:
 
 run-dev:
 	@FINAGENT_HMAC_KEY='$(FINAGENT_HMAC_KEY)' uv run finagent $(ARGS)
+
+run-live:
+	@FINAGENT_LLM=anthropic uv run --env-file .env finagent $(ARGS)
 
 schema:
 	@uv run python -c "import json; from finagent.domain.results import FinalResult; print(json.dumps(FinalResult.model_json_schema(), indent=2))"

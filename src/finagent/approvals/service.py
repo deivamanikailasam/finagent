@@ -14,6 +14,7 @@ from finagent.config.clock import Clock, add_business_days, local_date
 from finagent.controls.decision import OUTCOME_PRECEDENCE
 from finagent.controls.rules import rule
 from finagent.domain.enums import Outcome
+from finagent.obs.redaction import redact
 from finagent.persistence.db import transaction
 from finagent.persistence.repos import ApprovalRecord, ApprovalRepo, AuditRepo, EscalationRecord
 from finagent.tools.schemas import (
@@ -280,7 +281,7 @@ class ApprovalService:
             "limit_amount": str(self._applied_limit(record, entry) or entry.limit),
             "register_version": entry.register_version,
             "decision": decision,
-            "reason": reason,
+            "reason": redact(reason),
             "response_json": json.dumps(asdict(response)),
         }
         with transaction(self._conn):

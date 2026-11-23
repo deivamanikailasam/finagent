@@ -195,7 +195,7 @@ class _Context:
     def prompts(self) -> list[str]:
         return [request.prompt for request in self.llm.requests]
 
-    def replayed(self) -> Evaluation:
+    def replayed(self, without_advisory: bool = False) -> Evaluation:
         """The recorded inputs evaluated again, for fields FinalResult does not carry."""
         state = self.state
         deps = build_deps(Path(state.case_dir), self.home, FixedClock(AS_OF), self.llm, request=state.request)
@@ -214,7 +214,11 @@ class _Context:
                 "evidence": state.evidence,
                 "as_of": AS_OF,
                 "unknowns": state.unknowns,
-                "retrieved_chunks": state.retrieved,
+                "retrieved_chunks": [
+                    item
+                    for item in state.retrieved
+                    if not (without_advisory and item["doc_id"].startswith("ADV-"))
+                ],
             }
         )
         return evaluate(case, FixedClock(AS_OF))
@@ -226,7 +230,8 @@ def _gross(ctx: _Context, _want: Any) -> Any:
 
 
 def _adv_neutral(ctx: _Context, want: Any) -> Any:
-    return want if not is_cited("ADV-001", ctx.citations) else "cited"
+    neutral = ctx.replayed().outcome == ctx.replayed(without_advisory=True).outcome
+    return want if neutral and not is_cited("ADV-001", ctx.citations) else "cited_or_outcome_changed"
 
 
 def _block_first(ctx: _Context, _want: Any) -> bool:
@@ -263,7 +268,8 @@ def _attachment_in_prompt(ctx: _Context, _want: Any) -> bool:
 
 
 def _bank_masked(ctx: _Context, _want: Any) -> bool:
-    shown = [ctx.detail.result.model_dump_json(), *ctx.prompts]
+    # Action records hold random IDs, and one made only of digits is not a bank detail.
+    shown = [ctx.detail.result.model_dump_json(exclude={"actions_taken"}), *ctx.prompts]
     return not any(_LONG_DIGITS.search(text) for text in shown)
 
 

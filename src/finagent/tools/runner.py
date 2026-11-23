@@ -1,8 +1,10 @@
 """Runs tools with validated arguments, deadlines, bounded retries, audit and budgets."""
 
+import contextvars
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -52,7 +54,9 @@ class ThreadExecutor:
             if late and error is None:
                 on_late(value)
 
-        threading.Thread(target=work, daemon=True).start()
+        # The worker keeps the caller's run ID, so its log lines stay correlated.
+        context = contextvars.copy_context()
+        threading.Thread(target=context.run, args=(work,), daemon=True).start()
         if not done.wait(timeout_s):
             with lock:
                 if not done.is_set():
@@ -82,7 +86,7 @@ class ToolResult:
     attempts: int = 0
 
 
-def _fault_kind(exc: Exception) -> str | None:
+def fault_kind(exc: Exception) -> str | None:
     if isinstance(exc, TimeoutError):
         return "timeout"
     if isinstance(exc, ConnectionError):
@@ -111,6 +115,7 @@ class ToolRunner:
         self._context = run_context
         self._limit = declarations.budget.max_tool_calls if max_tool_calls is None else max_tool_calls
         self.tool_calls = 0
+        self._covered = False
 
     def _audit(self, event: str, tool: str, outcome: str, started: float, **extra: Any) -> None:
         try:
@@ -161,12 +166,23 @@ class ToolRunner:
             raise BudgetExceeded(f"tool-call budget of {self._limit} used")
         self.tool_calls += 1
 
-    def call(self, name: str, args: Mapping[str, Any]) -> ToolResult:
+    @contextmanager
+    def one_invocation(self) -> Iterator[None]:
+        """Several reads that form one step, such as the query templates, spend one budget unit."""
+        self.charge()
+        self._covered = True
+        try:
+            yield
+        finally:
+            self._covered = False
+
+    def call(self, name: str, args: Mapping[str, Any], charged: bool = True) -> ToolResult:
         if name not in self._tools or name not in self._declarations or name not in TOOL_SCHEMAS:
             raise KeyError(f"tool is not available: {name}")
-        if self.tool_calls >= self._limit:
-            raise BudgetExceeded(f"tool-call budget of {self._limit} used")
-        self.tool_calls += 1  # one invocation, however many retry attempts it takes
+        if charged and not self._covered:
+            if self.tool_calls >= self._limit:
+                raise BudgetExceeded(f"tool-call budget of {self._limit} used")
+            self.tool_calls += 1  # one invocation, however many retry attempts it takes
         declaration = self._declarations[name]
         input_model, output_model = TOOL_SCHEMAS[name]
         started = time.perf_counter()
@@ -197,7 +213,7 @@ class ToolRunner:
                 self._audit("tool_attempt", name, type(exc).__name__, started, attempt=attempt)
                 raise  # a definite answer, such as a duplicate, is never an unknown result
             except Exception as exc:
-                kind = _fault_kind(exc)
+                kind = fault_kind(exc)
                 self._audit("tool_attempt", name, kind or "tool_error", started, attempt=attempt)
                 if kind in declaration.retry_on and attempt < declaration.max_attempts:
                     self._executor.sleep(self._delay(attempt))

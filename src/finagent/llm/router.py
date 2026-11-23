@@ -1,5 +1,6 @@
 """Primary model, one repair, then the deterministic template. No path can change the outcome."""
 
+import time
 from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -65,7 +66,9 @@ class Router:
         self._config = config
         self._audit = audit or (lambda *_args, **_kwargs: None)
 
-    def _record(self, hop: int, digest: str, response: RationaleResponse, outcome: str) -> None:
+    def _record(
+        self, hop: int, digest: str, response: RationaleResponse, outcome: str, elapsed: float
+    ) -> None:
         cost = self._config.cost(response.model, response.usage) if self._config else None
         self._audit(
             outcome,
@@ -78,6 +81,7 @@ class Router:
             input_tokens=response.usage.input_tokens,
             output_tokens=response.usage.output_tokens,
             cost_usd=str(cost) if cost is not None else "unpriced",
+            duration_ms=elapsed,
         )
 
     def _keep_raw(self, hop: int, raw_text: str) -> None:
@@ -102,11 +106,16 @@ class Router:
                     system=SYSTEM, prompt=prompt, allowed_citations=allowed, repair_errors=errors
                 )
                 calls += 1
+                started = time.perf_counter()
                 try:
                     response = self._primary.generate_rationale(request)
                 except Exception as exc:  # a provider failure cannot be repaired by asking again
-                    self._audit("error", hop=hop, prompt_hash=digest, error=type(exc).__name__)
+                    elapsed = (time.perf_counter() - started) * 1000
+                    self._audit(
+                        "error", hop=hop, prompt_hash=digest, error=type(exc).__name__, duration_ms=elapsed
+                    )
                     break
+                elapsed = (time.perf_counter() - started) * 1000
                 model = response.model
                 stops[str(response.stop_reason)] += 1
                 self._keep_raw(hop, response.raw_text)
@@ -116,7 +125,7 @@ class Router:
                     if problem
                     else tuple(str(item) for item in validate(response.parsed, evaluation, allowed))
                 )
-                self._record(hop, digest, response, errors[0] if errors else "ok")
+                self._record(hop, digest, response, errors[0] if errors else "ok", elapsed)
                 if not errors:
                     return RouterResult("LLM", response.parsed, digest, model, calls, dict(stops))
         return RouterResult(

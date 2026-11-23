@@ -7,6 +7,8 @@ from typing import Any
 
 import yaml
 
+from finagent.obs.redaction import redact
+
 SPEC_PATH = Path(__file__).resolve().parents[3] / "spec" / "graph.yaml"
 SPEC: dict[str, Any] = yaml.safe_load(SPEC_PATH.read_text(encoding="utf-8"))
 NODES: tuple[str, ...] = tuple(SPEC["nodes"])
@@ -66,6 +68,8 @@ class RunState:
         data = asdict(self)
         data["evidence"] = {}
         data["retrieved"] = [{**item, "text": ""} for item in data["retrieved"]]
+        if data["request"]:  # free-text notes can hold bank or contact details
+            data["request"] = {**data["request"], "notes": redact(data["request"].get("notes", ""))}
         return json.dumps(data, sort_keys=True, default=str)
 
     @classmethod

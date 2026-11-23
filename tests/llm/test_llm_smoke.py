@@ -5,12 +5,9 @@ from pathlib import Path
 import anthropic
 import pytest
 
-from finagent.config.clock import FixedClock
-from finagent.controls.decision import evaluate
+from finagent.eval.live import prepare_inputs
 from finagent.llm.anthropic_adapter import AnthropicLLM, load_model_config
-from finagent.llm.prompt import RationaleInput
 from finagent.llm.router import Router
-from fixtures.builder import build_case
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -18,12 +15,11 @@ ROOT = Path(__file__).resolve().parents[2]
 @pytest.mark.llm
 def test_one_real_rationale_call():
     config = load_model_config(ROOT / "config/model.yaml")
-    case = build_case("FIN-001")
-    decided = evaluate(case, FixedClock(case.as_of))
+    evaluation, chunks = prepare_inputs("FIN-001")  # the same inputs a real run gives the model
     events = []
     router = Router(AnthropicLLM(config), "llm", config, lambda o, **kw: events.append((o, kw)))
     try:
-        result = router.rationale(RationaleInput.from_evaluation(decided))
+        result = router.rationale(evaluation, chunks)
     except anthropic.NotFoundError:
         pytest.skip("the configured model was not found")
     if events and events[0][1].get("error") == "NotFoundError":
