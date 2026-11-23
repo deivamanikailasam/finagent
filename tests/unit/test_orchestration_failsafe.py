@@ -2,11 +2,16 @@
 
 import json
 
+import pytest
+
 import finagent.tools.factory as tool_factory
+from finagent.orchestration import nodes
+from finagent.orchestration.checkpoint import resume
 from finagent.persistence.db import connect
-from finagent.persistence.repos import CheckpointRepo
+from finagent.persistence.repos import CheckpointRepo, RunRepo
 from finagent.rag.retrieve import RetrievalDenied, Retriever
 from tests.acceptance.support_graph import counts, new_home, run_case
+from tests.acceptance.support_resilience import SimulatedCrash, make_workspace, restart
 
 
 def test_block_found_by_reconciliation_is_reported(monkeypatch):
@@ -57,3 +62,48 @@ def test_block_authorisation_is_checkpointed_before_the_write(monkeypatch):
 
     assert len(saved) == 1
     assert saved[0][0] == saved[0][1]
+
+
+def test_run_records_what_it_was_decided_against():
+    report = run_case("FIN-001")
+    conn = connect(report.deps.app_db)
+    try:
+        row = RunRepo(conn).get(report.run_id)
+    finally:
+        conn.close()
+
+    assert all(len(value) == 64 for value in (row.corpus_hash, row.prompt_hash, row.config_hash))
+    assert row.model_id
+
+
+def test_recorded_model_reply_is_not_bought_again_after_a_crash(monkeypatch):
+    real_route = nodes.HANDLERS["ROUTE"]
+    state = {"crashed": False}
+
+    def crash_once(run_state, context):
+        if not state["crashed"]:
+            state["crashed"] = True
+            raise SimulatedCrash("ROUTE")
+        real_route(run_state, context)
+
+    monkeypatch.setitem(nodes.HANDLERS, "ROUTE", crash_once)
+    home = make_workspace()
+    deps, runner = restart("FIN-001", home)
+    with pytest.raises(SimulatedCrash):
+        runner.start()
+    run_id = deps.conn.execute("SELECT run_id FROM runs").fetchone()[0]
+
+    deps, _ = restart("FIN-001", home)
+    calls = []
+    real_llm = deps.llm
+
+    class CountingLLM:
+        def generate_rationale(self, request):
+            calls.append(request)
+            return real_llm.generate_rationale(request)
+
+    deps.llm = CountingLLM()
+    view = resume(run_id, deps)
+
+    assert view.status == "AWAITING_APPROVAL"
+    assert calls == []

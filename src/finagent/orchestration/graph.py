@@ -51,6 +51,11 @@ class RunState:
     pending_write: str | None = None
     refresh: bool = False
     tool_calls: int = 0
+    corpus_hash: str = ""
+    config_hash: str = ""
+    prompt_hash: str | None = None
+    model_id: str | None = None
+    llm_response: dict[str, Any] | None = None
     actions: list[dict[str, Any]] = field(default_factory=list)
 
     def to_json(self) -> str:

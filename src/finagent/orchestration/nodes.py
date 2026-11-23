@@ -1,5 +1,6 @@
 """One function per graph node. Each reads and updates RunState and sets state.signal."""
 
+import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal
@@ -50,6 +51,7 @@ BLOCK_SIGNALS = {
     "AFTER_DUPLICATE": "blocked_after_duplicate_violation",
 }
 AGENT_ROLE = "agent"
+RATIONALE_SYSTEM = "Explain the fixed outcome only."
 RECEIPT_CHECK = "receipt_evidence"
 DUPLICATE_CITATION = "FIN-POL-005#s2"
 
@@ -216,16 +218,21 @@ def draft_rationale(state: RunState, ctx: NodeContext) -> None:
     prompt = (
         f"Outcome: {state.outcome}. Category: {state.primary_category}. Next action: {state.next_action}."
     )
-    request = RationaleRequest(
-        system="Explain the fixed outcome only.",
-        prompt=prompt,
-        allowed_citations=tuple(state.sections["citations"]),
-    )
-    try:
-        response = ctx.deps.llm.generate_rationale(request)
-        ctx.deps.audit(state.run_id, "llm_call", str(response.stop_reason), model=response.model)
-    except Exception:
-        ctx.deps.audit(state.run_id, "llm_call", "error")
+    prompt_hash = hashlib.sha256(f"{RATIONALE_SYSTEM}\n{prompt}".encode()).hexdigest()
+    if state.llm_response is None or state.prompt_hash != prompt_hash:  # a recorded reply is not re-bought
+        state.prompt_hash, state.model_id, state.llm_response = prompt_hash, None, None
+        request = RationaleRequest(
+            system=RATIONALE_SYSTEM,
+            prompt=prompt,
+            allowed_citations=tuple(state.sections["citations"]),
+        )
+        try:
+            response = ctx.deps.llm.generate_rationale(request)
+            state.model_id = response.model
+            state.llm_response = response.model_dump(mode="json")
+            ctx.deps.audit(state.run_id, "llm_call", str(response.stop_reason), model=response.model)
+        except Exception:
+            ctx.deps.audit(state.run_id, "llm_call", "error")
     basis = [item["failed_rule"] for item in state.sections["exceptions"]] or ["CALC-GROSS"]
     state.sections["inferences"] = [
         Inference(

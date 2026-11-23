@@ -15,9 +15,10 @@ from finagent.domain.enums import RunStatus
 from finagent.domain.requests import ProcessingRequest
 from finagent.domain.results import FinalResult
 from finagent.llm.client import LLMClient
+from finagent.orchestration.checkpoint import fingerprints, restore
 from finagent.orchestration.graph import PAUSE_NODES, PAUSED, TERMINAL, RunState, next_node
 from finagent.orchestration.nodes import HANDLERS, NodeContext, build_result
-from finagent.persistence.db import connect, migrate
+from finagent.persistence.db import connect, migrate, transaction
 from finagent.persistence.repos import AuditRepo, CheckpointRepo, RunRepo
 from finagent.rag.loader import load_verified
 from finagent.rag.retrieve import Retriever, load_case_documents
@@ -187,27 +188,25 @@ class Runner:
         run_id = str(uuid.uuid4())
         now = deps.clock.now_utc()
         self._runs.create(run_id, request.case_id, RunStatus.RUNNING, "VALIDATE", now, now)
+        corpus_hash, config_hash = fingerprints()
         state = RunState(
             run_id=run_id,
             case_id=request.case_id,
             request=request.model_dump(mode="json"),
             evidence=read("evidence"),
+            corpus_hash=corpus_hash,
+            config_hash=config_hash,
         )
-        self._checkpoints.append(run_id, state.node, state.to_json(), now)
+        self._save(state)
         return self._drive(state)
 
     def resume(self, run_id: str) -> RunView:
         """Continue after a decision. A run that is still waiting, or finished, is returned unchanged."""
-        saved = self._checkpoints.latest(run_id)
-        if saved is None:
-            raise KeyError(f"unknown run: {run_id}")
-        state = RunState.from_json(saved[2])
+        state = restore(self._checkpoints, run_id)
         if state.node in TERMINAL:
             return self._view(state)
-        if state.node in PAUSE_NODES and state.signal == PAUSED:
-            if not self._leave_pause(state):
-                return self._view(state)
-            self._save(state)
+        if state.node in PAUSE_NODES and state.signal == PAUSED and not self._leave_pause(state):
+            return self._view(state)
         return self._drive(state)
 
     def _leave_pause(self, state: RunState) -> bool:
@@ -225,16 +224,26 @@ class Runner:
             state.signal = "approved_hold_or_escalate"
         else:
             state.signal = "approved_post_or_reject"  # REVALIDATE also handles an invalidated request
-        state.node = next_node(state.node, state)
+        self._advance(state.node, state)
         return True
+
+    def _advance(self, node: str, state: RunState) -> None:
+        state.node = next_node(node, state)
+        if state.node in TERMINAL:
+            state.visited.append(state.node)  # in the same checkpoint, so a crash cannot lose it
+        self._save(state)
 
     def _save(self, state: RunState) -> None:
         now = self.deps.clock.now_utc()
-        self._checkpoints.append(state.run_id, state.node, state.to_json(), now)
         status = self._status(state)
         result = build_result(state) if status != RunStatus.RUNNING else None
         result_json = result.model_dump_json() if result is not None else None
-        self._runs.update(state.run_id, status, state.node, now, result_json)
+        with transaction(self.deps.conn):  # the checkpoint and the run row never disagree
+            self._checkpoints.append(state.run_id, state.node, state.to_json(), now)
+            self._runs.update(state.run_id, status, state.node, now, result_json)
+            self._runs.record_hashes(
+                state.run_id, state.corpus_hash, state.prompt_hash, state.config_hash, state.model_id
+            )
 
     @staticmethod
     def _status(state: RunState) -> RunStatus:
@@ -293,8 +302,5 @@ class Runner:
                     return self._view(state)
                 if node == "SUBMIT" and state.signal == "committed" and self.deps.crash_hook:
                     self.deps.crash_hook("after_submit_before_checkpoint")
-            state.node = next_node(node, state)
-            self._save(state)
-        state.visited.append(state.node)
-        self._save(state)
+            self._advance(node, state)
         return self._view(state)
