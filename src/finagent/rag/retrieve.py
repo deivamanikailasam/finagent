@@ -1,20 +1,19 @@
-"""The retrieve_finance_documents tool: permission-filtered, trust-labelled lanes (decision log IX)."""
+"""The retrieve_finance_documents tool: permission-scoped, trust-labelled lanes (decision log IX)."""
 
 import hashlib
 import json
+import os
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from functools import lru_cache
 from pathlib import Path
-
-import numpy as np
 
 from finagent.domain.enums import DocType, TrustClass
 from finagent.obs.log import log_event
 from finagent.rag.chunker import Chunk, chunk_document, chunk_documents
 from finagent.rag.index import BM25Index
-from finagent.rag.loader import Document, IngestResult, ingest, is_authoritative
+from finagent.rag.loader import Document, IngestResult, is_authoritative, load_verified
 from finagent.rag.tokenizer import tokenize
 from finagent.tools.schemas import (
     Lane,
@@ -25,6 +24,9 @@ from finagent.tools.schemas import (
 
 LANE_K: dict[Lane, int] = {"authoritative": 5, "case_evidence": 5, "non_authoritative": 2}
 MIN_COVERAGE = 0.5
+KNOWN_ROLES = frozenset({"agent", "approver", "approver_financial_control", "read_only"})
+_CASE_ACL = ("agent", "approver", "approver_financial_control")
+_CASE_ID = re.compile(r"[A-Z]{3}-[0-9]{3}[a-z]?")
 _DOC_TYPES = {
     TrustClass.AUTHORITATIVE: DocType.POLICY,
     TrustClass.SUPERSEDED: DocType.POLICY,
@@ -54,6 +56,7 @@ class FetchedSection:
     version: str
     section: str
     trust_class: TrustClass
+    lane: Lane
     citation: str
     text: str
 
@@ -98,14 +101,16 @@ def _case_entries(documents: list[CaseDocument]) -> list[_Entry]:
             trust_class=trust,
             effective=None,
             superseded=None,
-            acl=("all",),
+            acl=_CASE_ACL,
             restricted=False,
             sha256=hashlib.sha256(item.text.encode()).hexdigest(),
             text=item.text,
         )
         public_id = f"CASE:{item.ref}"
         for chunk in chunk_document(document):
-            entries.append(_Entry(chunk, _DOC_TYPES[trust], public_id, public_id, item.case_id, item.po_ref))
+            # The signed-off expectations cite a single-section note as CASE:<ref>.
+            citation = public_id if chunk.section == "s0" else f"{public_id}#{chunk.section}"
+            entries.append(_Entry(chunk, _DOC_TYPES[trust], public_id, citation, item.case_id, item.po_ref))
     return entries
 
 
@@ -118,27 +123,32 @@ class Retriever:
         ]
         self._entries = [*corpus, *_case_entries(case_documents or [])]
         self._by_chunk = {entry.chunk.chunk_id: entry for entry in self._entries}
-        self.index = BM25Index([entry.chunk for entry in self._entries], use_prefix=True)
+        self.index = BM25Index([entry.chunk for entry in self._entries], use_prefix=True)  # evaluation only
+        self._scoped: dict[tuple[str, ...], BM25Index] = {}
+
+    def is_in_force(self, doc_id: str, as_of: datetime) -> bool:
+        return is_authoritative(self._result, doc_id, as_of)
 
     @staticmethod
     def _allowed(chunk: Chunk, role: str) -> bool:
-        return "all" in chunk.acl or role in chunk.acl
+        return role in KNOWN_ROLES and ("all" in chunk.acl or role in chunk.acl)
 
-    def _visible(self, entry: _Entry, filters: RetrievalFilters, role: str) -> bool:
+    def _visible(self, entry: _Entry, filters: RetrievalFilters, role: str, as_of: datetime) -> bool:
         if not self._allowed(entry.chunk, role):
             return False
         if filters.doc_type is not None and entry.doc_type != filters.doc_type:
             return False
         if entry.case_id is not None and entry.case_id != filters.case_id:
             return False
-        return not (entry.case_id is not None and filters.po_ref and entry.po_ref != filters.po_ref)
+        if entry.case_id is not None and filters.po_ref and entry.po_ref != filters.po_ref:
+            return False
+        # A policy outside its validity dates is not offered at all, so it cannot be cited.
+        return entry.chunk.trust_class != TrustClass.AUTHORITATIVE or self.is_in_force(entry.doc_id, as_of)
 
     def _lane(self, entry: _Entry, as_of: datetime) -> Lane:
         if entry.chunk.trust_class == TrustClass.CASE_EVIDENCE:
             return "case_evidence"
-        if is_authoritative(self._result, entry.doc_id, as_of):
-            return "authoritative"
-        return "non_authoritative"  # includes a policy that is not yet effective at as_of
+        return "authoritative" if self.is_in_force(entry.doc_id, as_of) else "non_authoritative"
 
     def _item(self, entry: _Entry, score: float, lane: Lane) -> RetrievalItem:
         chunk = entry.chunk
@@ -154,113 +164,161 @@ class Retriever:
             text=chunk.text,
         )
 
+    def _scope_index(self, entries: list[_Entry]) -> BM25Index:
+        # Statistics come only from what this caller may see in this lane, so hidden or untrusted
+        # documents cannot change a score, a coverage value or an abstention.
+        key = tuple(entry.chunk.chunk_id for entry in entries)
+        if key not in self._scoped:
+            self._scoped[key] = BM25Index([entry.chunk for entry in entries], use_prefix=True)
+        return self._scoped[key]
+
+    def _lane_entries(
+        self, filters: RetrievalFilters, role: str, as_of: datetime
+    ) -> dict[Lane, list[_Entry]]:
+        lanes: dict[Lane, list[_Entry]] = {lane: [] for lane in LANE_K}
+        for entry in self._entries:
+            if self._visible(entry, filters, role, as_of):
+                lanes[self._lane(entry, as_of)].append(entry)
+        return lanes
+
+    def _require_known_role(self, role: str) -> None:
+        if role not in KNOWN_ROLES:
+            log_event("retrieval_denied", outcome="denied", reason_code="unknown_role")
+            raise RetrievalDenied("unknown principal role")
+
+    def lane_ranking(
+        self, query: str, filters: RetrievalFilters | None, role: str, as_of: datetime, lane: Lane
+    ) -> list[str]:
+        """Citations in rank order before abstention, for evaluation reporting."""
+        self._require_known_role(role)
+        entries = self._lane_entries(filters or RetrievalFilters(), role, as_of)[lane]
+        if not entries:
+            return []
+        scored = self._scope_index(entries).retrieve(tokenize(query), k=len(entries))
+        return [self._by_chunk[chunk.chunk_id].citation for chunk, _ in scored]
+
     def retrieve_finance_documents(
         self, query: str, filters: RetrievalFilters | None, principal_role: str, as_of: datetime
     ) -> RetrieveFinanceDocumentsOutput:
         started = time.perf_counter()
-        filters = filters or RetrievalFilters()
+        self._require_known_role(principal_role)
         tokens = tokenize(query)
-        visible = [self._visible(entry, filters, principal_role) for entry in self._entries]
-        mask = np.array(visible, dtype=float)  # permissions apply before scoring
-        scored = self.index.retrieve(tokens, k=len(self._entries), weight_mask=mask)
-        visible_ids = {
-            entry.chunk.chunk_id for entry, shown in zip(self._entries, visible, strict=True) if shown
-        }
-        ranked = sorted(
-            ((chunk, score) for chunk, score in scored if score > 0 and chunk.chunk_id in visible_ids),
-            key=lambda pair: (-pair[1], pair[0].chunk_id),
-        )
-        lane_candidates: dict[Lane, int] = dict.fromkeys(LANE_K, 0)
-        for entry, shown in zip(self._entries, visible, strict=True):
-            if shown:
-                lane_candidates[self._lane(entry, as_of)] += 1
-        lanes: dict[Lane, list[RetrievalItem]] = {lane: [] for lane in LANE_K}
-        tops: dict[Lane, Chunk] = {}
-        for chunk, score in ranked:
-            entry = self._by_chunk[chunk.chunk_id]
-            lane = self._lane(entry, as_of)
-            tops.setdefault(lane, chunk)
-            if len(lanes[lane]) < LANE_K[lane]:
-                lanes[lane].append(self._item(entry, score, lane))
+        lane_entries = self._lane_entries(filters or RetrievalFilters(), principal_role, as_of)
+        lanes: dict[Lane, tuple[RetrievalItem, ...]] = {}
         abstained: dict[Lane, bool] = {}
         reasons: dict[Lane, str] = {}
-        for lane in LANE_K:
-            reason = self._abstain_reason(lane_candidates[lane], tops.get(lane), tokens)
+        restricted: list[str] = []
+        for lane, entries in lane_entries.items():
+            ranked: list[tuple[Chunk, float]] = []
+            index = self._scope_index(entries) if entries else None
+            if index is not None:
+                ranked = index.retrieve(tokens, k=len(entries))
+            reason = self._abstain_reason(index, ranked, tokens)
             abstained[lane] = reason is not None
             if reason is not None:
                 reasons[lane] = reason
-                lanes[lane] = []
-        output = RetrieveFinanceDocumentsOutput(
-            lanes={lane: tuple(items) for lane, items in lanes.items()},
-            abstained=abstained,
-            abstain_reason=reasons,
-        )
-        self._audit(query, principal_role, output, started)
-        return output
-
-    def _abstain_reason(self, candidates: int, top: Chunk | None, tokens: list[str]) -> str | None:
-        if candidates == 0:
-            return "no_candidate"
-        if top is None:
-            return "non_positive"
-        return "low_coverage" if self.index.coverage(tokens, top) < MIN_COVERAGE else None
-
-    def _audit(self, query: str, role: str, output: RetrieveFinanceDocumentsOutput, started: float) -> None:
-        for items in output.lanes.values():
-            for item in items:
-                if self._is_restricted(item.citation):
-                    log_event("restricted_access", outcome="ok", doc_id=item.doc_id, principal_role=role)
+                lanes[lane] = ()
+                continue
+            chosen = [(self._by_chunk[chunk.chunk_id], score) for chunk, score in ranked[: LANE_K[lane]]]
+            lanes[lane] = tuple(self._item(entry, score, lane) for entry, score in chosen)
+            restricted.extend(entry.doc_id for entry, _ in chosen if entry.chunk.restricted)
+        output = RetrieveFinanceDocumentsOutput(lanes=lanes, abstained=abstained, abstain_reason=reasons)
+        for doc_id in restricted:
+            log_event("restricted_access", outcome="ok", doc_id=doc_id, principal_role=principal_role)
         log_event(
             "retrieval.query",
             outcome="ok",
             duration_ms=(time.perf_counter() - started) * 1000,
             query_hash=hashlib.sha256(query.encode()).hexdigest(),
-            principal_role=role,
+            principal_role=principal_role,
             authoritative_count=len(output.lanes["authoritative"]),
             case_evidence_count=len(output.lanes["case_evidence"]),
             non_authoritative_count=len(output.lanes["non_authoritative"]),
             abstained_lanes=",".join(lane for lane, value in output.abstained.items() if value),
         )
+        return output
 
-    def _is_restricted(self, citation: str) -> bool:
-        entry = self._by_chunk.get(citation)
-        return entry is not None and entry.chunk.restricted
+    @staticmethod
+    def _abstain_reason(
+        index: BM25Index | None, ranked: list[tuple[Chunk, float]], tokens: list[str]
+    ) -> str | None:
+        if index is None:
+            return "no_candidate"
+        if not ranked:
+            return "non_positive"
+        return "low_coverage" if index.coverage(tokens, ranked[0][0]) < MIN_COVERAGE else None
+
+    def _resolve(self, citation: str, case_id: str | None) -> _Entry | None:
+        if not citation.startswith("CASE:"):
+            return self._by_chunk.get(citation)
+        if case_id is None or not _CASE_ID.fullmatch(case_id):
+            return None  # case evidence is reachable only through its own case
+        reference = citation.removeprefix("CASE:")
+        key = f"CASE:{case_id}:{reference}" if "#" in reference else f"CASE:{case_id}:{reference}#s0"
+        return self._by_chunk.get(key)
 
     def fetch_by_id(
-        self, citation: str, principal_role: str = "agent", case_id: str | None = None
+        self, citation: str, principal_role: str, as_of: datetime, case_id: str | None = None
     ) -> FetchedSection | None:
-        """Fetch one section by citation under the same permissions as a search."""
-        key = (
-            f"CASE:{case_id}:{citation.removeprefix('CASE:')}#s0"
-            if citation.startswith("CASE:")
-            else citation
-        )
-        entry = self._by_chunk.get(key)
+        """Fetch one section under the same permissions and validity dates as a search."""
+        started = time.perf_counter()
+        citation_hash = hashlib.sha256(citation.encode()).hexdigest()
+
+        def audit(outcome: str, count: int) -> None:
+            log_event(
+                "retrieval.fetch",
+                outcome=outcome,
+                duration_ms=(time.perf_counter() - started) * 1000,
+                citation_hash=citation_hash,
+                principal_role=principal_role if principal_role in KNOWN_ROLES else "unknown",
+                count=count,
+            )
+
+        if principal_role not in KNOWN_ROLES:
+            audit("denied", 0)
+            raise RetrievalDenied("unknown principal role")
+        entry = self._resolve(citation, case_id)
         if entry is None:
+            audit("not_found", 0)
             return None
         if not self._allowed(entry.chunk, principal_role):
             log_event(
                 "restricted_denied", outcome="denied", doc_id=entry.doc_id, principal_role=principal_role
             )
+            audit("denied", 0)
             raise RetrievalDenied(f"{principal_role} may not read {entry.doc_id}")
-        if entry.chunk.restricted:
-            log_event("restricted_access", outcome="ok", doc_id=entry.doc_id, principal_role=principal_role)
         chunk = entry.chunk
+        if chunk.trust_class == TrustClass.AUTHORITATIVE and not self.is_in_force(entry.doc_id, as_of):
+            audit("not_in_force", 0)  # never hand back a section labelled authoritative outside its dates
+            return None
+        if chunk.restricted:
+            log_event("restricted_access", outcome="ok", doc_id=entry.doc_id, principal_role=principal_role)
+        audit("ok", 1)
         return FetchedSection(
             entry.doc_id,
             entry.doc_type,
             chunk.version,
             chunk.section,
             chunk.trust_class,
+            self._lane(entry, as_of),
             entry.citation,
             chunk.text,
         )
 
 
-@lru_cache(maxsize=1)
-def default_retriever() -> Retriever:
-    result = ingest(Path("corpus"), Path("config/registry.yaml"))
-    return Retriever(result, load_case_documents(Path("fixtures/cases")))
+_CACHE: dict[Path, tuple[str, Retriever]] = {}
+
+
+def default_retriever(root: Path = Path(".")) -> Retriever:
+    """Verify the corpus on every call, and rebuild when the verified contents change."""
+    root = root.resolve()
+    home = Path(os.environ.get("FINAGENT_HOME") or root / "var")
+    result = load_verified(root / "corpus", root / "config/registry.yaml", home / "index_manifest.json")
+    identity = f"{result.index_hash}:{result.registry_sha256}"
+    cached = _CACHE.get(root)
+    if cached is None or cached[0] != identity:
+        _CACHE[root] = (identity, Retriever(result, load_case_documents(root / "fixtures/cases")))
+    return _CACHE[root][1]
 
 
 def retrieve_finance_documents(
@@ -270,6 +328,6 @@ def retrieve_finance_documents(
 
 
 def fetch_by_id(
-    citation: str, principal_role: str = "agent", case_id: str | None = None
+    citation: str, principal_role: str, as_of: datetime, case_id: str | None = None
 ) -> FetchedSection | None:
-    return default_retriever().fetch_by_id(citation, principal_role, case_id)
+    return default_retriever().fetch_by_id(citation, principal_role, as_of, case_id)

@@ -58,7 +58,7 @@ def test_expected_sources_cover_every_rule_source():
 def test_expected_sources_exist_in_the_corpus():
     for citations in EXPECTED_SOURCE.values():
         for citation in citations:
-            assert RETRIEVER.fetch_by_id(citation) is not None, citation
+            assert RETRIEVER.fetch_by_id(citation, "agent", AS_OF) is not None, citation
 
 
 def test_templates_read_no_free_text_fields():

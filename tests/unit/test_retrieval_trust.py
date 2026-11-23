@@ -51,7 +51,8 @@ def test_read_only_role_never_gets_the_restricted_policy(log_stream):
 
 
 def test_unknown_role_never_gets_the_restricted_policy():
-    assert "FIN-POL-004" not in doc_ids(search(BANK_QUERY, role="intruder"))
+    with pytest.raises(RetrievalDenied):
+        search(BANK_QUERY, role="intruder")
 
 
 def test_agent_gets_the_restricted_policy_and_access_is_logged(log_stream):
@@ -69,9 +70,9 @@ def test_acl_applies_before_scoring():
 
 def test_fetch_by_id_enforces_the_acl(log_stream):
     with pytest.raises(RetrievalDenied):
-        RETRIEVER.fetch_by_id("FIN-POL-004#s2", principal_role="read_only")
+        RETRIEVER.fetch_by_id("FIN-POL-004#s2", "read_only", AS_OF)
     assert any(event["event"] == "restricted_denied" for event in events(log_stream))
-    assert RETRIEVER.fetch_by_id("FIN-POL-004#s2", principal_role="agent").section == "s2"
+    assert RETRIEVER.fetch_by_id("FIN-POL-004#s2", "agent", AS_OF).section == "s2"
     assert any(event["event"] == "restricted_access" for event in events(log_stream))
 
 
