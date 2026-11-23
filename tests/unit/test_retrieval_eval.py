@@ -1,7 +1,9 @@
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 
+from finagent.config.clock import SYDNEY
 from finagent.eval.retrieval_eval import (
     EvalReport,
     QueryResult,
@@ -17,6 +19,7 @@ from finagent.eval.retrieval_eval import (
 from finagent.tools.schemas import RetrievalItem, RetrieveFinanceDocumentsOutput
 
 ROOT = Path(__file__).resolve().parents[2]
+AS_OF = datetime(2026, 9, 15, 9, 0, tzinfo=SYDNEY)
 
 
 def item(doc_id="FIN-POL-003", trust_class="AUTHORITATIVE"):
@@ -93,12 +96,12 @@ def test_trap_match_does_not_confuse_a_similar_document_id():
 
 
 def test_invariants_are_zero_for_clean_results():
-    assert invariant_counts([output(item())]) == (0, 0)
+    assert invariant_counts([(output(item()), AS_OF)], lambda doc, day: True) == (0, 0)
 
 
 def test_invariants_count_stale_and_non_authoritative_items():
     bad = output(item("FIN-POL-003-OLD", "SUPERSEDED"), item("ADV-001", "EXTERNAL_UNVERIFIED"))
-    assert invariant_counts([bad, output(item())]) == (2, 2)
+    assert invariant_counts([(bad, AS_OF), (output(item()), AS_OF)], lambda doc, day: True) == (2, 2)
 
 
 def test_load_case_reads_fixture_files_by_path():

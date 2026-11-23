@@ -4,13 +4,15 @@ Settings are fixed in advance. Run with: uv run python -m finagent.eval.retrieva
 """
 
 import json
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from finagent.config.clock import SYDNEY
 from finagent.domain.case import Case
 from finagent.domain.enums import TrustClass
 from finagent.rag.retrieve import LANE_K, Retriever, default_retriever
@@ -28,6 +30,17 @@ TRAP_DOCS = {
     "trap_injection_bank_change": "ADV-001",
     "trap_aud_75_freight": "ADV-002",
 }
+BOUNDARY_DATES = (datetime(2026, 7, 31, 9, 0, tzinfo=SYDNEY), datetime(2026, 8, 1, 9, 0, tzinfo=SYDNEY))
+NOT_EVALUATED = (
+    "BM25 k1/b, stemming and stopwords",
+    "the prefix on/off sweep",
+    "top-k",
+    "the repair count",
+    "retry parameters (fault tests cover behaviour)",
+    "prompt variants",
+    "Sonnet 5.5",
+    "synonym expansion",
+)
 
 
 @dataclass(frozen=True)
@@ -51,6 +64,7 @@ class QueryResult:
     false_abstain: bool
     false_answer: bool
     trap_above_target: bool | None = None
+    rank_before_abstention: int | None = None
 
 
 @dataclass(frozen=True)
@@ -73,6 +87,7 @@ def score_query(
     returned: Sequence[str],
     abstained: bool,
     trap_above: bool | None = None,
+    rank_before_abstention: int | None = None,
 ) -> QueryResult:
     """Score one query. An unanswerable query has no hit or rank, only a false-answer check."""
     answerable = list(relevant) != [NO_ANSWER]
@@ -89,6 +104,7 @@ def score_query(
         false_abstain=answerable and abstained,
         false_answer=not answerable and not abstained,
         trap_above_target=trap_above,
+        rank_before_abstention=rank_before_abstention,
     )
 
 
@@ -102,12 +118,15 @@ def trap_above_target(ranking: Sequence[str], trap_doc: str, relevant: Iterable[
     return target is None or trap < target
 
 
-def invariant_counts(outputs: Iterable[RetrieveFinanceDocumentsOutput]) -> tuple[int, int]:
-    """Count (stale items, non-authoritative documents) in the authoritative lane."""
+def invariant_counts(
+    outputs: Iterable[tuple[RetrieveFinanceDocumentsOutput, datetime]],
+    in_force: Callable[[str, datetime], bool],
+) -> tuple[int, int]:
+    """Count (items not in force at their as_of, non-authoritative documents) in the authoritative lane."""
     stale = cited = 0
-    for output in outputs:
+    for output, as_of in outputs:
         for item in output.lanes["authoritative"]:
-            stale += item.trust_class != TrustClass.AUTHORITATIVE
+            stale += item.trust_class != TrustClass.AUTHORITATIVE or not in_force(item.doc_id, as_of)
             cited += item.doc_id in NON_AUTHORITATIVE_DOCS
     return stale, cited
 
@@ -143,12 +162,12 @@ def _unfiltered_ranking(retriever: Retriever, query: str) -> list[str]:
 def evaluate(
     retriever: Retriever, rules: list[dict[str, Any]], queries: list[dict[str, Any]], case: Case
 ) -> EvalReport:
-    outputs: dict[str, RetrieveFinanceDocumentsOutput] = {}
+    outputs: dict[tuple[str, datetime], RetrieveFinanceDocumentsOutput] = {}
 
-    def search(query: str) -> RetrieveFinanceDocumentsOutput:
-        if query not in outputs:
-            outputs[query] = retriever.retrieve_finance_documents(query, None, ROLE, case.as_of)
-        return outputs[query]
+    def search(query: str, as_of: datetime = case.as_of) -> RetrieveFinanceDocumentsOutput:
+        if (query, as_of) not in outputs:
+            outputs[(query, as_of)] = retriever.retrieve_finance_documents(query, None, ROLE, as_of)
+        return outputs[(query, as_of)]
 
     rule_results = []
     for rule in rules:
@@ -169,6 +188,8 @@ def evaluate(
         above = None
         if trap is not None:
             above = trap_above_target(_unfiltered_ranking(retriever, query["query"]), trap, query["relevant"])
+        ranking = retriever.lane_ranking(query["query"], None, ROLE, case.as_of, "authoritative")
+        best = next((i for i, item in enumerate(ranking, 1) if item in query["relevant"]), None)
         query_results.append(
             score_query(
                 query["id"],
@@ -177,9 +198,16 @@ def evaluate(
                 _authoritative(output),
                 output.abstained["authoritative"],
                 above,
+                best,
             )
         )
-    stale, cited = invariant_counts(outputs.values())
+    # The stale check also runs on both sides of the FIN-POL-003 effective date.
+    for as_of in BOUNDARY_DATES:
+        for query in {*(fn(case) for fn in TEMPLATES.values()), *(item["query"] for item in queries)}:
+            search(query, as_of)
+    stale, cited = invariant_counts(
+        ((output, as_of) for (_, as_of), output in outputs.items()), retriever.is_in_force
+    )
     return EvalReport(tuple(rule_results), tuple(query_results), stale, cited)
 
 
@@ -189,6 +217,7 @@ def _flag(value: bool | None) -> str:
 
 def render_report(report: EvalReport) -> str:
     found = sum(rule.rank is not None for rule in report.rules)
+    strict = sum(rule.rank is not None and not rule.additional_missing for rule in report.rules)
     lines = [
         "## Retrieval",
         "",
@@ -199,7 +228,14 @@ def render_report(report: EvalReport) -> str:
         "Golden labels were proposed by Claude from the policy text, without running retrieval, "
         "accepted by the owner, and committed before this evaluation.",
         "",
+        "This run follows the independent review fixes to scoring scope, tokenisation and tie-breaking. "
+        "The first run, before those fixes, measured rule-source recall 26/31, with G3 and G4 as false "
+        "abstentions. Templates, thresholds and labels were not changed between runs.",
+        "",
         f"**Rule-source recall@{TOP_K}: {found}/{len(report.rules)} ({found / len(report.rules):.1%})**",
+        "",
+        f"Requiring every pinned section of a rule: {strict}/{len(report.rules)} "
+        f"({strict / len(report.rules):.1%}).",
         "",
         "### Rule-source misses",
         "",
@@ -238,10 +274,34 @@ def render_report(report: EvalReport) -> str:
             "",
             "Trap above target is measured on the unfiltered ranking, for information only.",
             "",
+            "### Golden misses",
+            "",
+        ]
+    )
+    golden_misses = [query for query in report.queries if query.hit is False or query.false_answer]
+    for query in golden_misses:
+        if query.abstained and query.rank_before_abstention is not None:
+            detail = f"retrieved at rank {query.rank_before_abstention}, then suppressed by abstention"
+        elif query.false_answer:
+            detail = "answered although no authoritative section applies"
+        else:
+            detail = "relevant section not retrieved in the top 5"
+        lines.append(f"- {query.query_id}: {detail}")
+    if not golden_misses:
+        lines.append("None.")
+    lines.extend(
+        [
+            "",
             "### Invariants",
+            "",
+            "Checked at the case date and on both sides of the FIN-POL-003 effective date.",
             "",
             f"- Stale in authoritative: {report.stale_in_authoritative}",
             f"- Non-authoritative cited: {report.non_authoritative_cited}",
+            "",
+            "### Not evaluated",
+            "",
+            *[f"- {item}" for item in NOT_EVALUATED],
             "",
         ]
     )
@@ -268,7 +328,7 @@ def run_retrieval_eval(root: Path = Path(".")) -> EvalReport:
     rules = yaml.safe_load((root / "spec/policy_rules.yaml").read_text(encoding="utf-8"))["rules"]
     queries = yaml.safe_load((root / "tests/retrieval/golden.yaml").read_text(encoding="utf-8"))["queries"]
     case = load_case(root / "fixtures/cases/FIN-001")
-    report = evaluate(default_retriever(), rules, queries, case)
+    report = evaluate(default_retriever(root), rules, queries, case)
     write_section(root / "docs/EVAL_RESULTS.md", render_report(report))
     settings = {"use_prefix": USE_PREFIX, "k": dict(LANE_K)}
     (root / "config/retrieval.yaml").write_text(yaml.safe_dump(settings, sort_keys=False), encoding="utf-8")
