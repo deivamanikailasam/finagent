@@ -13,6 +13,7 @@ from finagent.tools.declarations import load_tool_declarations
 from finagent.tools.schemas import (
     TOOL_SCHEMAS,
     AuthorityRecord,
+    BlockPayload,
     HistoryRecord,
     InvoiceDocument,
     InvoiceLine,
@@ -25,6 +26,7 @@ from finagent.tools.schemas import (
     RetrieveFinanceDocumentsOutput,
     VendorRecord,
     WriteOutput,
+    payload_hash_of,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -187,20 +189,21 @@ def test_history_has_prior_outcome_and_hold_category():
 
 
 def test_write_input_requires_64_hex_key_and_rejects_float_payload():
+    body = {"case_id": "FIN-001", "vendor_id": "V-100", "invoice_no_norm": "inv1001"}
     fields = {
         "run_id": "run-1",
         "action": "BLOCK",
         "rule_id": "TOL-GOODS",
         "authorisation": {"type": "SYSTEM_FAILSAFE", "id": "auth-1"},
-        "payload": {"amount": "9900.00"},
-        "payload_hash": SHA,
+        "payload": body,
+        "payload_hash": payload_hash_of(BlockPayload(**body)),
         "idempotency_key": SHA,
     }
     assert PlacePaymentBlockInput(**fields).rule_id == "TOL-GOODS"
     with pytest.raises(ValidationError):
         PlacePaymentBlockInput(**{**fields, "idempotency_key": "short"})
     with pytest.raises(ValidationError):
-        PlacePaymentBlockInput(**{**fields, "payload": {"nested": [{"amount": 9900.0}]}})
+        PlacePaymentBlockInput(**{**fields, "payload": {**body, "amount": 9900.0}})
 
 
 def retrieval_item(**overrides):

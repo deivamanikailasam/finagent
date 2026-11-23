@@ -1,5 +1,6 @@
 """Shared strict types: exact money, identifiers and a base model that refuses floats."""
 
+import re
 from collections.abc import Mapping
 from decimal import Decimal
 from typing import Annotated, Any, ClassVar, Literal
@@ -7,14 +8,21 @@ from typing import Annotated, Any, ClassVar, Literal
 from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
 MAX_MONEY_DIGITS = 15
+CENT = Decimal("0.01")
 
 Currency = Literal["AUD", "USD", "NZD", "EUR", "GBP"]
 Sha256Hex = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+NonBlank = Annotated[str, Field(pattern=r"\S")]
+
+_MONEY_TEXT = re.compile(r"-?[0-9]+(?:\.[0-9]{1,2})?")
+_EXACT_TEXT = re.compile(r"-?[0-9]+(?:\.[0-9]+)?")
 
 
 def _reject_inexact(value: Any) -> Any:
     if isinstance(value, float | bool):
         raise ValueError("money must be a Decimal, string or integer, never a float or bool")
+    if isinstance(value, str) and not _MONEY_TEXT.fullmatch(value):
+        raise ValueError("money text must be plain ASCII digits with at most 2 decimal places")
     return value
 
 
@@ -26,7 +34,9 @@ def _check_money(value: Decimal) -> Decimal:
         raise ValueError("money has more than 2 decimal places")
     if len(digits) + max(exponent, 0) > MAX_MONEY_DIGITS:
         raise ValueError(f"money has more than {MAX_MONEY_DIGITS} digits")
-    return value
+    if value.is_zero() and value.is_signed():
+        raise ValueError("money must not be negative zero")
+    return value.quantize(CENT)  # one canonical form, so equal amounts always hash the same
 
 
 def _not_negative(value: Decimal) -> Decimal:
@@ -35,9 +45,25 @@ def _not_negative(value: Decimal) -> Decimal:
     return value
 
 
+def _reject_inexact_number(value: Any) -> Any:
+    if isinstance(value, float | bool):
+        raise ValueError("value must be a Decimal, string or integer, never a float or bool")
+    if isinstance(value, str) and not _EXACT_TEXT.fullmatch(value):
+        raise ValueError("number text must be plain ASCII digits")
+    return value
+
+
+def _finite(value: Decimal) -> Decimal:
+    if not value.is_finite():
+        raise ValueError("value must be finite")
+    return value
+
+
 # Negative values are legal only on invoice lines, where NEGATIVE-LINE must be able to see them.
 LineMoney = Annotated[Decimal, BeforeValidator(_reject_inexact), AfterValidator(_check_money)]
 Money = Annotated[LineMoney, AfterValidator(_not_negative)]
+# Calculations keep full precision, such as a 12.3456 tolerance threshold.
+ExactDecimal = Annotated[Decimal, BeforeValidator(_reject_inexact_number), AfterValidator(_finite)]
 
 
 def _contains_float(value: Any) -> bool:
@@ -53,7 +79,8 @@ def _contains_float(value: Any) -> bool:
 class DomainModel(BaseModel):
     """Frozen, closed model. No field may carry a float unless the class names it in float_fields."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    # Revalidating instances stops model_copy or model_construct from smuggling in an unchecked value.
+    model_config = ConfigDict(extra="forbid", frozen=True, revalidate_instances="always")
 
     float_fields: ClassVar[frozenset[str]] = frozenset()
 

@@ -2,7 +2,7 @@
 
 from typing import ClassVar, Literal
 
-from pydantic import AwareDatetime, Field, StrictInt
+from pydantic import AwareDatetime, Field
 
 from finagent.domain.requests import ProcessingRequest
 from finagent.domain.results import Unknown
@@ -12,6 +12,7 @@ from finagent.tools.schemas import (
     HistoryRecord,
     InvoiceDocument,
     PurchaseOrder,
+    Quantity,
     RetrievalItem,
     VendorRecord,
 )
@@ -19,7 +20,7 @@ from finagent.tools.schemas import (
 
 class GoodsReceiptLine(DomainModel):
     po_line_ref: str = Field(min_length=1)
-    qty: StrictInt
+    qty: Quantity
 
 
 class GoodsReceiptNote(DomainModel):

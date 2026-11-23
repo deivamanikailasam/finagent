@@ -7,12 +7,12 @@ import copy
 import hashlib
 import json
 import re
-from datetime import datetime
+from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Any
 
-from finagent.config.clock import SYDNEY
+from finagent.config.clock import SYDNEY, local_date
 from finagent.domain.case import Case
 from finagent.obs.fingerprint import fingerprint
 
@@ -20,6 +20,7 @@ FIXTURE_HMAC_KEY = "0" * 64  # zero-entropy test key; never used outside fixture
 CASES_DIR = Path(__file__).resolve().parent / "cases"
 
 CENT = Decimal("0.01")
+DFA_EFFECTIVE = date(2026, 8, 1)
 TAX_RATES = {"GST": Decimal("0.10"), "FRE": Decimal("0")}
 RECORDS = {"request", "invoice", "vendor", "po", "history", "authority", "evidence", "as_of"}
 VENDOR_ACCOUNT = "00001111"
@@ -241,7 +242,8 @@ def _fin_004(raw: dict[str, Any]) -> None:
 
 
 def _fin_005(raw: dict[str, Any]) -> None:
-    # Its own invoice and PO, so a shared sandbox cannot turn it into a duplicate of FIN-001.
+    # Its own invoice and PO. Scenarios still run in isolated workspaces: the same vendor, gross
+    # and date as FIN-001 would otherwise trip the probable-duplicate rule in a shared sandbox.
     raw["request"]["invoice_ref"] = "INV-1005"
     raw["invoice"]["invoice_no"] = "INV-1005"
     raw["invoice"]["po_ref"] = "PO-4475"
@@ -272,21 +274,31 @@ def _set_path(root: dict[str, Any], path: str, value: Any) -> None:
             node.append(copy.deepcopy(value))
         else:
             node[last] = copy.deepcopy(value)
-    except (IndexError, KeyError, TypeError) as exc:
+    except (AttributeError, IndexError, KeyError, TypeError) as exc:
         raise ValueError(f"invalid override path: {path}") from exc
+
+
+def _canonical_path(parts: list[str | int]) -> str:
+    text = ""
+    for part in parts:
+        text += f"[{part}]" if isinstance(part, int) else (f".{part}" if text else part)
+    return text
 
 
 def _explicit_paths(overrides: dict[str, Any]) -> set[str]:
     explicit = set()
 
-    def visit(path: str, value: Any) -> None:
-        explicit.add(path)
+    def visit(parts: list[str | int], value: Any) -> None:
+        explicit.add(_canonical_path(parts))
         if isinstance(value, dict):
             for key, item in value.items():
-                visit(f"{path}.{key}", item)
+                visit([*parts, key], item)
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                visit([*parts, index], item)
 
     for path, value in overrides.items():
-        visit(path, value)
+        visit(_parts(path), value)
     return explicit
 
 
@@ -308,11 +320,14 @@ def _recompute(raw: dict[str, Any], explicit: set[str]) -> None:
         raw["request"]["amount"] = invoice["gross"]
     po = raw["po"]
     if po is not None and "po.totals.incl_tax" not in explicit:
-        codes = {line.get("po_line_ref"): line["tax_code"] for line in invoice["lines"]}
-        # A PO line with no invoice line is taken as GST, the higher commitment.
+        rates: dict[Any, Decimal] = {}
+        for line in invoice["lines"]:
+            rate = TAX_RATES.get(line["tax_code"], Decimal("0"))
+            rates[line.get("po_line_ref")] = max(rate, rates.get(line.get("po_line_ref"), rate))
+        # A PO line with no invoice line is taken as GST, and shared lines use the highest rate:
+        # both give the higher commitment, so authority is never understated.
         incl_tax = sum(
-            Decimal(line["line_value"])
-            * (1 + TAX_RATES.get(codes.get(line["po_line_ref"], "GST"), Decimal("0")))
+            Decimal(line["line_value"]) * (1 + rates.get(line["po_line_ref"], TAX_RATES["GST"]))
             for line in po["lines"]
         )
         po["totals"]["incl_tax"] = _money(Decimal(incl_tax))
@@ -332,9 +347,16 @@ def _raw_case(case_id: str, overrides: dict[str, Any] | None) -> dict[str, Any]:
     if customise is not None:
         customise(raw)
     overrides = overrides or {}
+    if FAULTS.get(case_id, {}).get("get_purchase_order") and any(_parts(p)[0] == "po" for p in overrides):
+        raise ValueError(f"{case_id} has no readable PO, so a PO override would be silently lost")
     for path, value in overrides.items():
         _set_path(raw, path, value)
-    _recompute(raw, _explicit_paths(overrides))
+    try:
+        _recompute(raw, _explicit_paths(overrides))
+    except (ArithmeticError, AttributeError, KeyError, TypeError) as exc:
+        raise ValueError("override values cannot be recomputed") from exc
+    day = local_date(datetime.fromisoformat(raw["as_of"]))
+    raw["authority_source"] = "FIN-POL-003" if day >= DFA_EFFECTIVE else None  # none in force before it
     return raw
 
 

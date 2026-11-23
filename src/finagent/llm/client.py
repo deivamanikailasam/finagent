@@ -16,7 +16,7 @@ class Claim(BaseModel):
 class Rationale(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    claims: tuple[Claim, ...]
+    claims: tuple[Claim, ...] = Field(min_length=1)  # an empty rationale explains nothing
 
 
 class Usage(BaseModel):
@@ -43,6 +43,7 @@ class RationaleResponse(BaseModel):
     model: str
     usage: Usage = Usage()
     stop_reason: str | None = None
+    response_id: str | None = None  # provider request ID, kept for the audit trail (FIN-POL-010 s4)
 
 
 class LLMClient(Protocol):

@@ -1,9 +1,11 @@
 """Input and output models for the 8 tools (decision log VII, XII). Bank values stay masked."""
 
+import hashlib
+import json
 from datetime import date
 from typing import Annotated, Any, ClassVar, Literal
 
-from pydantic import AwareDatetime, Field, StrictInt
+from pydantic import AwareDatetime, BeforeValidator, Field, StrictInt, model_validator
 
 from finagent.domain.enums import (
     AuthorisationType,
@@ -21,6 +23,15 @@ Last4 = Annotated[str, Field(pattern=r"^[0-9]{4}$")]
 MaskedAccount = Annotated[str, Field(pattern=r"^\*{4}[0-9]{4}$")]
 Quantity = Annotated[StrictInt, Field(ge=0)]
 Lane = Literal["authoritative", "case_evidence", "non_authoritative"]
+RiskFlag = Literal["overseas_account", "manual_payment", "fraud_flag"]
+
+
+def _blank_to_none(value: Any) -> Any:
+    return None if isinstance(value, str) and not value.strip() else value
+
+
+# A blank header value counts as missing, so it becomes a finding instead of passing as present.
+HeaderText = Annotated[str | None, BeforeValidator(_blank_to_none)]
 
 
 class RemitTo(DomainModel):
@@ -41,17 +52,17 @@ class InvoiceLine(DomainModel):
 
 class InvoiceDocument(DomainModel):
     # Header fields are optional so a missing one becomes a finding, not a crash.
-    legal_name: str | None = None
-    invoice_no: str | None = None
+    legal_name: HeaderText = None
+    invoice_no: HeaderText = None
     invoice_date: date | None = None
     currency: Currency | None = None
     gross: Money | None = None
     tax: Money | None = None
-    po_ref: str | None = None
-    bill_to_entity: str | None = None
+    po_ref: HeaderText = None
+    bill_to_entity: HeaderText = None
     remit_to: RemitTo | None = None
     lines: tuple[InvoiceLine, ...] = ()
-    attachments: tuple[RequestAttachment, ...] = ()
+    attachments: tuple[RequestAttachment, ...] = Field(default=(), max_length=10)
 
 
 class VendorModification(DomainModel):
@@ -65,7 +76,7 @@ class VendorRecord(DomainModel):
     status: VendorStatus
     payment_details_masked: MaskedAccount
     fingerprint: Sha256Hex
-    risk_flags: tuple[str, ...] = ()
+    risk_flags: tuple[RiskFlag, ...] = ()  # closed list: a mistyped flag must not read as clean
     created_by: str = Field(min_length=1)
     created_at: AwareDatetime
     modification_history: tuple[VendorModification, ...] = ()
@@ -77,6 +88,14 @@ class VendorRecord(DomainModel):
 class PoTotals(DomainModel):
     excl_tax: Money
     incl_tax: Money
+
+
+class Tolerances(DomainModel):
+    goods_absolute: Money
+    goods_percent: Money
+    services_absolute: Money
+    services_percent: Money
+    freight_absolute: Money
 
 
 class PoLine(DomainModel):
@@ -102,7 +121,7 @@ class PurchaseOrder(DomainModel):
     requester: str = Field(min_length=1)
     currency: Currency
     totals: PoTotals
-    tolerances: dict[str, Money] = Field(default_factory=dict)
+    tolerances: Tolerances
     freight_permitted: bool = False
     lines: tuple[PoLine, ...] = ()
     receipts: tuple[Receipt, ...] = ()
@@ -131,6 +150,12 @@ class Delegation(DomainModel):
     start: date
     end: date
 
+    @model_validator(mode="after")
+    def _end_not_before_start(self) -> "Delegation":
+        if self.end < self.start:
+            raise ValueError("delegation end is before its start")
+        return self
+
 
 class AuthorityRecord(DomainModel):
     approver_id: str = Field(min_length=1)
@@ -148,7 +173,7 @@ class RetrievalItem(DomainModel):
     doc_type: DocType
     version: str = Field(min_length=1)
     section: str = Field(min_length=1)
-    score: float = Field(gt=0)
+    score: float = Field(gt=0, allow_inf_nan=False)
     lane: Lane
     trust_class: TrustClass
     citation: str = Field(min_length=1)
@@ -166,13 +191,37 @@ class Authorisation(DomainModel):
     id: str = Field(min_length=1)
 
 
+class BlockPayload(DomainModel):
+    case_id: CaseId
+    vendor_id: str = Field(min_length=1)
+    invoice_no_norm: str = Field(min_length=1)
+
+
+class DecisionPayload(BlockPayload):
+    amount: Money
+    currency: Currency
+
+
+def payload_hash_of(payload: DomainModel) -> str:
+    """SHA-256 of the payload's canonical JSON. Money is already in one canonical form."""
+    canonical = json.dumps(payload.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
 class WriteInput(DomainModel):
     run_id: str = Field(min_length=1)
     action: str = Field(min_length=1)  # a plain string so the tool itself denies an unknown action
     authorisation: Authorisation
-    payload: dict[str, Any]
+    payload: BlockPayload
     payload_hash: Sha256Hex
     idempotency_key: Sha256Hex
+
+    @model_validator(mode="after")
+    def _hash_matches_payload(self) -> "WriteInput":
+        # An approval is bound to this hash, so it must describe the payload actually submitted.
+        if self.payload_hash != payload_hash_of(self.payload):
+            raise ValueError("payload_hash does not match the payload")
+        return self
 
 
 class WriteOutput(DomainModel):
@@ -236,7 +285,7 @@ class PlacePaymentBlockInput(WriteInput):
 
 
 class SubmitFinanceDecisionInput(WriteInput):
-    pass
+    payload: DecisionPayload
 
 
 TOOL_SCHEMAS: dict[str, tuple[type[DomainModel], type[DomainModel]]] = {
