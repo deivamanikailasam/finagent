@@ -207,17 +207,8 @@ def test_resume_leaves_a_paused_run_paused(cli):
     )
 
 
-def test_eval_list(cli):
-    body = out(cli("eval", "list", "--json"))
-    assert {item["name"] for item in body["evals"]} == {"retrieval", "scenarios", "live"}
-    assert "FIN-001" in body["cases"]
-
-
-@pytest.mark.parametrize("args", [("eval",), ("eval", "--live")])
-def test_evals_from_a_later_work_package_refuse_clearly(cli, args):
-    result = cli(*args)
-    assert result.exit_code == 2
-    assert "WP 8.2" in result.stderr
+def test_eval_list_is_empty_before_any_run(cli):
+    assert out(cli("eval", "list", "--json")) == {"runs": []}
 
 
 def test_ingest_records_the_manifest(cli, tmp_path):

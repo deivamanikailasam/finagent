@@ -46,7 +46,7 @@ def _normalise(text: str) -> str:
     return "".join(ch for ch in unicodedata.normalize("NFKC", text) if unicodedata.category(ch) != "Cf")
 
 
-def _has_forbidden_claim(text: str) -> bool:
+def has_forbidden_claim(text: str) -> bool:
     patterns, allowed = _forbidden()
     checked = " ".join(_normalise(text).casefold().split())
     for phrase in allowed:
@@ -101,7 +101,7 @@ def validate(
             errors.append(ValidationError("citation_support", index))
         if not _numbers_are_bound(claim, values):
             errors.append(ValidationError("number_binding", index))
-        if _has_forbidden_claim(claim.text):
+        if has_forbidden_claim(claim.text):
             errors.append(ValidationError("forbidden_claim", index))
     return errors
 

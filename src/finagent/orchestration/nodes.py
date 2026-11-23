@@ -219,7 +219,7 @@ def evaluate_case(state: RunState, ctx: NodeContext) -> None:
     state.signal = "done"
 
 
-def _rationale_input(state: RunState) -> RationaleInput:
+def rationale_input(state: RunState) -> RationaleInput:
     sections = state.sections
     lines = (state.invoice or {}).get("lines", [])
     return RationaleInput(
@@ -237,12 +237,16 @@ def _rationale_input(state: RunState) -> RationaleInput:
     )
 
 
-def _record_rationale(state: RunState, ctx: NodeContext) -> None:
-    evaluation = _rationale_input(state)
-    chunks = [
+def rationale_chunks(state: RunState) -> list[PromptChunk]:
+    return [
         PromptChunk(item["citation"], item["doc_id"], item["trust_class"], item["text"])
         for item in (*state.policy_sections, *state.retrieved)
     ]
+
+
+def _record_rationale(state: RunState, ctx: NodeContext) -> None:
+    evaluation = rationale_input(state)
+    chunks = rationale_chunks(state)
     digest = prompt_hash(build_prompt(evaluation, chunks))
     if state.llm_response is not None and state.prompt_hash == digest:
         return  # a recorded reply to this exact prompt is not bought again after a crash

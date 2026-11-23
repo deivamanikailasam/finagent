@@ -2,7 +2,7 @@
 
 import json
 import os
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -10,12 +10,14 @@ import typer
 from pydantic import BaseModel
 
 from finagent.config.settings import SettingsError, load_settings
+from finagent.eval.live import render_model_section, run_live
+from finagent.eval.report import list_runs, render_table, run_offline
 from finagent.eval.retrieval_eval import render_report, run_retrieval_eval
+from finagent.llm.anthropic_adapter import AnthropicLLM, load_model_config
 from finagent.obs.log import configure_logging
 from finagent.orchestration.runner import ROOT
 from finagent.rag.loader import IndexIntegrityError, ingest, persist_manifest, trust_report
 from finagent.service.run_service import (
-    CASES_DIR,
     DecisionCommand,
     RunService,
     RunServiceError,
@@ -158,27 +160,54 @@ def run_resume(run_id: str, compact: JsonFlag = False) -> None:
 def eval_command(
     context: typer.Context,
     retrieval: Annotated[bool, typer.Option("--retrieval", help="Run the retrieval evaluation.")] = False,
-    live: Annotated[bool, typer.Option("--live", help="Use the real model (WP 8.2).")] = False,
-    configs: Annotated[str | None, typer.Option("--configs", help="Live configurations (WP 8.2).")] = None,
+    live: Annotated[bool, typer.Option("--live", help="Call the real model. Costs money.")] = False,
+    configs: Annotated[
+        str, typer.Option("--configs", help="Live configs: template,haiku.")
+    ] = "template,haiku",
 ) -> None:
-    """Run an evaluation."""
+    """Run the offline evaluation, the retrieval evaluation or the live model run."""
     if context.invoked_subcommand is not None:
         return
-    if live or configs:
-        raise _fail("the live evaluation is not available until WP 8.2")
-    if not retrieval:
-        raise _fail("the scenario evaluation is not available until WP 8.2; use --retrieval")
-    os.chdir(ROOT)  # the retrieval evaluation reads and writes project-relative files
-    typer.echo(render_report(run_retrieval_eval(ROOT)))
+    if live:
+        _run_live(configs)
+        return
+    if retrieval:
+        os.chdir(ROOT)  # the retrieval evaluation reads and writes project-relative files
+        typer.echo(render_report(run_retrieval_eval(ROOT)))
+        return
+    try:
+        home = load_settings().home
+    except SettingsError as exc:
+        raise _fail(str(exc)) from None
+    payload, path = run_offline(home, datetime.now(UTC))
+    typer.echo(render_table(payload))
+    typer.echo(f"Stored: {path}")
+    if not payload["passed"]:
+        raise typer.Exit(code=1)
+
+
+def _run_live(configs: str) -> None:
+    names = [name.strip() for name in configs.split(",") if name.strip()]
+    try:
+        settings = load_settings()
+    except SettingsError as exc:
+        raise _fail(str(exc)) from None
+    if "haiku" in names and settings.anthropic_api_key is None:
+        raise _fail("the live run needs ANTHROPIC_API_KEY in the environment")
+    model_config = load_model_config(ROOT / "config/model.yaml")
+    try:
+        payload, path = run_live(names, lambda: AnthropicLLM(model_config), settings.home, datetime.now(UTC))
+    except ValueError as exc:
+        raise _fail(str(exc)) from None
+    typer.echo(render_model_section(payload["runs"], datetime.fromisoformat(payload["generated_at"])))
+    typer.echo(f"Stored: {path}")
 
 
 @eval_app.command("list")
 def eval_list(compact: JsonFlag = False) -> None:
-    """List the evaluations and cases."""
-    cases = sorted(path.name for path in CASES_DIR.iterdir() if (path / "meta.json").is_file())
-    evals = [
-        {"name": "retrieval", "available": True},
-        {"name": "scenarios", "available": False},
-        {"name": "live", "available": False},
-    ]
-    _emit({"evals": evals, "cases": cases}, compact)
+    """List the stored evaluation runs with per-case results."""
+    try:
+        home = load_settings().home
+    except SettingsError as exc:
+        raise _fail(str(exc)) from None
+    _emit({"runs": list_runs(home)}, compact)
