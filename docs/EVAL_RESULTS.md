@@ -57,3 +57,20 @@ Checked at the case date and on both sides of the FIN-POL-003 effective date.
 - prompt variants
 - Sonnet 5.5
 - synonym expansion
+
+## Model
+
+Live run at 2026-11-23T05:55:37.135298+00:00.
+One run per input and configuration; no confidence intervals.
+Gate inputs are computed on the raw output, before validation.
+
+| Case | Config | Shown | First-try valid | Raw forbidden claim | Truncated or refused | Exceptions covered | Input tokens | Output tokens | Cost (USD) | Manual read |
+|---|---|---|---|---|---|---|---|---|---|---|
+| FIN-001 | template | TEMPLATE | False | False | False | 0/0 | 0 | 0 | 0 |  |
+| FIN-003 | template | TEMPLATE | False | False | False | 2/2 | 0 | 0 | 0 |  |
+| FIN-001 | haiku | LLM | True | False | False | 0/0 | 4016 | 2412 | unpriced |  |
+| FIN-003 | haiku | LLM | False | False | False | 2/2 | 8552 | 5574 | unpriced |  |
+
+Latency: p50 11932 ms, max 12095 ms (indicative, small sample).
+
+Prompt version 1.3. The prompt and validator were adjusted three times after failed FIN-001 smoke runs, before this run, so FIN-001 is not a held-out result. FIN-003 was not used for that tuning. The Manual read column is for the owner.

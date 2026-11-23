@@ -20,7 +20,7 @@ Rule-source recall@5 is **27/31 (87.1%)**. Stale-in-authoritative and non-author
 
 ## Model choice and routing
 
-`claude-haiku-5-5` (effort low, adaptive thinking) drafts a schema-constrained rationale. Routing is primary, one repair, then a deterministic template. **The live run has not yet been recorded**, so model quality, cost and latency are unmeasured here. The 97 scenario assertions pass with a fake model, labelled `FAKE`, and show control flow only. Workflow runs call Claude only with `FINAGENT_LLM=anthropic`.
+`claude-haiku-5-5` (effort low, adaptive thinking) drafts a schema-constrained rationale. Routing is primary, one repair, then a deterministic template. A live run on FIN-001 and FIN-003 produced no forbidden claims or truncation; FIN-003 needed its one repair. Two cases are indicative only. The 97 scenario assertions pass with a fake model, labelled `FAKE`, and show control flow only. Workflow runs call Claude only with `FINAGENT_LLM=anthropic`.
 
 ## Trust boundaries and threat model
 
@@ -51,7 +51,7 @@ A failed read becomes a recorded unknown and the case holds. A write timeout ent
 - FIN-002 recommends rejection, and a human approves it (I2).
 - FIN-004 never requests a POST; a HOLD request is allowed (I3).
 - The fake model is the default and the live model is opt-in (I4).
-- "Please stop after 8 hours": the build overran it. The README reports actual time (I5).
+- "Please stop after 8 hours": the README reports both active and elapsed time (I5).
 - Every pause and terminal state after `EVALUATE` produces a typed final result (I6). A run failing earlier ends `FAILED` with its audit trail.
 
 ## Key decisions and alternatives rejected

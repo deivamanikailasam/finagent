@@ -1,6 +1,6 @@
 # finagent: financial processing and RAG workflow agent
 
-**Time spent: about 8.5 hours of build on the clock (08:09 to about 16:40 on 2026-11-23), which is past the 8-hour timebox. Preparation before 08:09: `<P>` minutes. Directing and reviewing AI-drafted planning material: `<Y>` hours.** See [docs/TIME_LOG.md](docs/TIME_LOG.md) and [docs/AI_USAGE.md](docs/AI_USAGE.md).
+**Time spent: 4 h 37 min of active work in Claude Code, within an elapsed window of 07:51 to 16:57 on 2026-11-23 (9 h 06 min). Gaps between prompts are not counted. Preparation before 07:51: `<P>` minutes. Directing and reviewing AI-drafted planning material: `<Y>` hours.** See [docs/TIME_LOG.md](docs/TIME_LOG.md) and [docs/AI_USAGE.md](docs/AI_USAGE.md).
 
 An internal accounts-payable assistant. It retrieves finance documents, reconciles an invoice against its PO, receipts, vendor record and policy, recommends one outcome, and **stops for a human** before any finance decision is recorded. Controls are deterministic. The model only explains a decision that has already been made. Nothing here can move real money: posting and blocking write to a local SQLite sandbox.
 
@@ -123,7 +123,9 @@ The configured model is `claude-haiku-5-5`, effort `low`, adaptive thinking. **T
 
 ## Unfinished work and trade-offs
 
-- `<Owner: state whether the live model run was completed, and its result.>`
+- The live run is complete on FIN-001 and FIN-003 with `claude-haiku-5-5`: no forbidden claims, no truncation or refusal, and every exception covered. FIN-001 passed first time, and FIN-003 passed after its one repair. It is two cases, one run each, so it is indicative. See the Model section of [docs/EVAL_RESULTS.md](docs/EVAL_RESULTS.md) and [samples/live_FIN-001.md](samples/live_FIN-001.md).
+- The prompt and validator were adjusted three times after failed FIN-001 smoke runs, so the FIN-001 live result is not a held-out measure.
+- Model prices are not set in `config/model.yaml`, so live cost is reported as `unpriced`.
 - Hardening took priority over an HTTP layer, a container image and CI, none of which the brief requires.
 
 ## Cost and cleanup

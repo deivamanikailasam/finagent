@@ -45,4 +45,4 @@ Claude ran two rounds of three independent AI reviewers over the finished build:
 
 ## Time
 
-See [TIME_LOG.md](TIME_LOG.md). Times are reconstructed from file and commit timestamps. The build ran past the 8-hour timebox, and pre-clock preparation is `<owner: minutes>`.
+See [TIME_LOG.md](TIME_LOG.md). Each block runs from its first prompt to Claude's last activity on it, and gaps between prompts are not counted. The log states both active time and the elapsed window. Pre-clock preparation is `<owner: minutes>`.
