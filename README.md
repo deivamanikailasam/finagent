@@ -1,6 +1,6 @@
 # finagent: financial processing and RAG workflow agent
 
-**Time spent: 4 h 37 min of active work in Claude Code, within an elapsed window of 07:51 to 16:57 on 2026-11-23 (9 h 06 min). Gaps between prompts are not counted. Preparation before 07:51: `<P>` minutes. Directing and reviewing AI-drafted planning material: `<Y>` hours.** See [docs/TIME_LOG.md](docs/TIME_LOG.md) and [docs/AI_USAGE.md](docs/AI_USAGE.md).
+**Time spent: 7 h 32 min of build, measured from execution in Claude Code to each commit. The build ran between 07:51 and 16:58 on 2026-11-23 (9 h 07 min elapsed).** See [docs/TIME_LOG.md](docs/TIME_LOG.md) and [docs/AI_USAGE.md](docs/AI_USAGE.md).
 
 An internal accounts-payable assistant. It retrieves finance documents, reconciles an invoice against its PO, receipts, vendor record and policy, recommends one outcome, and **stops for a human** before any finance decision is recorded. Controls are deterministic. The model only explains a decision that has already been made. Nothing here can move real money: posting and blocking write to a local SQLite sandbox.
 

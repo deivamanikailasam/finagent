@@ -51,7 +51,7 @@ A failed read becomes a recorded unknown and the case holds. A write timeout ent
 - FIN-002 recommends rejection, and a human approves it (I2).
 - FIN-004 never requests a POST; a HOLD request is allowed (I3).
 - The fake model is the default and the live model is opt-in (I4).
-- "Please stop after 8 hours": the README reports both active and elapsed time (I5).
+- "Please stop after 8 hours": the README reports build and elapsed time (I5).
 - Every pause and terminal state after `EVALUATE` produces a typed final result (I6). A run failing earlier ends `FAILED` with its audit trail.
 
 ## Key decisions and alternatives rejected
