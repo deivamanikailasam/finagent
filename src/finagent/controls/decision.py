@@ -10,7 +10,14 @@ from finagent.controls.rules import load_rules
 from finagent.domain.case import Case
 from finagent.domain.enums import ExceptionCategory as Category
 from finagent.domain.enums import Outcome
-from finagent.domain.results import Calculation, ExceptionRecord, PolicyFinding, Unknown, next_review_date
+from finagent.domain.results import (
+    Assumption,
+    Calculation,
+    ExceptionRecord,
+    PolicyFinding,
+    Unknown,
+    next_review_date,
+)
 
 OUTCOME_PRECEDENCE = (
     Outcome.ESCALATE_CONTROL_REVIEW,
@@ -46,6 +53,7 @@ NEXT_ACTION: dict[Category | None, str] = {
     Category.OTHER_CONTROL_RISK: "AP Operations reviews the finding",
     None: "Submit for approval under the DFA matrix",
 }
+UNKNOWN_RECEIPTER_ACTION = "AP Operations identifies the receipter and requests confirmation"
 FRAUD_ACTION = "Financial Crime and Controls to review the contributing evidence; supplier not notified"
 VERIFY_BANK_ACTION = (
     "Vendor Governance to open a verification task using the contact already on the vendor master"
@@ -75,6 +83,7 @@ class Evaluation:
     security_events: tuple[dict[str, Any], ...]
     citations: tuple[str, ...]
     notify_supplier: bool
+    assumptions: tuple[Assumption, ...] = ()
 
 
 def _rank(finding: PolicyFinding, order: dict[str, int]) -> tuple[int, int, int]:
@@ -86,14 +95,37 @@ def _rank(finding: PolicyFinding, order: dict[str, int]) -> tuple[int, int, int]
     )
 
 
-def _owner(finding: PolicyFinding, case: Case) -> str:
+def _named_owner(finding: PolicyFinding) -> str:
     rules = load_rules()
-    owner = finding.owner or (rules[finding.rule_id].owner if finding.rule_id in rules else DEFAULT_OWNER)
-    person = next((name for name in PERSON_OWNERS if name in owner), None)
+    return finding.owner or (rules[finding.rule_id].owner if finding.rule_id in rules else DEFAULT_OWNER)
+
+
+def _person(finding: PolicyFinding) -> str | None:
+    owner = _named_owner(finding)
+    return next((name for name in PERSON_OWNERS if name in owner), None)
+
+
+def _owner(finding: PolicyFinding, case: Case) -> str:
+    person = _person(finding)
     if person is None:
-        return owner
+        return _named_owner(finding)
     known = finding.owner_known and case.po is not None
     return person if known else DEFAULT_OWNER
+
+
+def _owner_assumptions(top: PolicyFinding | None, owner: str, case: Case) -> tuple[Assumption, ...]:
+    """State how the owner was chosen whenever the corpus does not name that owner."""
+    statements: list[str] = []
+    if top is None:
+        statements = [f"owner {owner}"]  # an approval has no failing rule to name an owner
+    elif _person(top) is not None and owner == DEFAULT_OWNER:
+        reason = "the PO is unavailable" if case.po is None else "the PO does not name them"
+        statements = [f"{_person(top)} unknown because {reason}", f"so owner is {owner}"]
+    else:
+        rule = load_rules().get(top.rule_id)
+        if rule is None or "assumption" in rule.owner_basis:
+            statements = [f"owner {owner}"]
+    return tuple(Assumption(id=f"ASM-{i}", statement=text) for i, text in enumerate(statements, 1))
 
 
 def confidence_score(unknown_sources: int, assumption_failures: int) -> Decimal:
@@ -157,14 +189,18 @@ def evaluate(
     # Missing evidence holds the case: with no failure, the unknown checks become the exceptions.
     open_items = failing or [item for item in findings if item.outcome == "UNKNOWN"]
     open_items = sorted(open_items, key=lambda item: _rank(item, order))
-    if open_items:
-        top = open_items[0]
+    top = open_items[0] if open_items else None
+    if top is not None:
         outcome = OUTCOME_PRECEDENCE[_rank(top, order)[0]]
         category, owner, action = top.category, _owner(top, case), NEXT_ACTION[top.category]
+        if category == Category.MISSING_RECEIPT and case.po is None:
+            action = UNKNOWN_RECEIPTER_ACTION  # with no PO, nobody can name the designated receipter
     else:
         outcome, category, owner, action = Outcome.APPROVE_FOR_POSTING, None, DEFAULT_OWNER, NEXT_ACTION[None]
+    assumptions = _owner_assumptions(top, owner, case)
     if indicators.outcome is not None:
         owner, action = indicators.owner, FRAUD_ACTION  # FIN-POL-007 s3, whatever the primary category
+        assumptions = ()  # the policy names this owner
     if indicators.bank_detail_claim:
         action = f"{action}; {VERIFY_BANK_ACTION}"
     unknown_sources = len({item.source for item in case.unknowns})
@@ -184,4 +220,5 @@ def evaluate(
         security_events=indicators.security_events,
         citations=tuple(citations),
         notify_supplier=indicators.notify_supplier,
+        assumptions=assumptions,
     )

@@ -14,7 +14,6 @@ from finagent.domain.case import Case
 from finagent.domain.enums import Outcome
 from finagent.domain.results import (
     Action,
-    Assumption,
     ExceptionRecord,
     Fact,
     FinalResult,
@@ -187,13 +186,6 @@ def evaluate_case(state: RunState, ctx: NodeContext) -> None:
         _read_authority(state, ctx)
         state.refresh = False
     result = evaluate(_case(state, ctx), ctx.deps.clock, invoice_blocked=_invoice_is_blocked(state, ctx))
-    rules = load_rules()
-    failing = [item for item in result.findings if item.outcome not in {"PASS", "UNKNOWN"}]
-    assumptions = [
-        Assumption(id=f"ASM-{item.rule_id}", statement=f"{item.rule_id}: {rules[item.rule_id].owner_basis}")
-        for item in failing
-        if item.rule_id in rules and "assumption" in rules[item.rule_id].owner_basis
-    ]
     state.outcome = str(result.outcome)
     state.primary_category = str(result.primary_category) if result.primary_category else None
     state.owner = result.owner
@@ -202,7 +194,7 @@ def evaluate_case(state: RunState, ctx: NodeContext) -> None:
     state.dfa_role = result.dfa_role
     state.sections = {
         "calculations": [item.model_dump(mode="json") for item in result.calculations],
-        "assumptions": [item.model_dump(mode="json") for item in {a.id: a for a in assumptions}.values()],
+        "assumptions": [item.model_dump(mode="json") for item in result.assumptions],
         "findings": [item.model_dump(mode="json") for item in result.findings],
         "exceptions": [item.model_dump(mode="json") for item in result.exceptions],
         "citations": list(result.citations),
