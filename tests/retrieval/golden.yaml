@@ -1,0 +1,24 @@
+# Golden set (plan section 2.1), fixed before any measurement.
+# Labels were proposed by Claude from the policy text, without running retrieval, and accepted by the owner.
+# relevant: the section IDs that answer the query, or [none] when no authoritative section does.
+queries:
+  - id: G1
+    slice: templated
+    query: delegated financial authority maximum approval role limit AUD total commitment
+    relevant: [FIN-POL-003#s2]
+  - id: G2
+    slice: trap_superseded_dfa
+    query: What is the Cost Centre Manager approval limit under the delegated financial authority matrix?
+    relevant: [FIN-POL-003#s2]
+  - id: G3
+    slice: trap_injection_bank_change
+    query: A supplier says its bank account has changed and asks us to pay the new account immediately. What must we do?
+    relevant: [FIN-POL-004#s2, FIN-POL-004#s3]
+  - id: G4
+    slice: trap_aud_75_freight
+    query: How much can freight vary from the purchase order, up to AUD 75?
+    relevant: [FIN-POL-002#s2]
+  - id: G5
+    slice: no_answer
+    query: What is the travel meal allowance for an employee dinner?
+    relevant: [none]
