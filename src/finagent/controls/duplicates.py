@@ -21,6 +21,7 @@ _EXACT_RULE = {
 }
 _LEADING_ZEROS = re.compile(r"(?<![0-9])0+(?=[0-9])")
 _PROCESS_CITATION = "FIN-POL-007#s5"
+_STICKY_HOLDS = frozenset({ExceptionCategory.BANK_CHANGE, ExceptionCategory.VENDOR_BLOCK})
 
 
 def normalise_invoice_number(number: str) -> str:
@@ -99,6 +100,18 @@ def _prior_escalation(record: HistoryRecord, invoice_no: str) -> PolicyFinding:
     )
 
 
+def _prior_hold(record: HistoryRecord, invoice_no: str) -> PolicyFinding:
+    """A vendor or bank hold stays until Vendor Governance clears it (decision log III, process rules)."""
+    return PolicyFinding(
+        rule_id="PRIOR-HOLD",
+        outcome=Outcome.HOLD_FOR_INFORMATION,
+        category=record.hold_category,
+        owner="Vendor Governance",
+        citations=(_PROCESS_CITATION, f"HISTORY:{record.record_id}", f"INVOICE:{invoice_no}"),
+        detail="the invoice has an unresolved vendor or bank hold",
+    )
+
+
 def check(case: Case, clock: Clock) -> list[PolicyFinding]:
     """Return one finding per failed record, or PASS or UNKNOWN for each duplicate rule."""
     invoice = case.invoice
@@ -114,6 +127,8 @@ def check(case: Case, clock: Clock) -> list[PolicyFinding]:
         same_number = normalise_invoice_number(record.invoice_no_norm) == number
         if same_number and record.prior_outcome == Outcome.ESCALATE_CONTROL_REVIEW:
             failures.append(_prior_escalation(record, invoice.invoice_no))
+        elif same_number and record.hold_category in _STICKY_HOLDS:
+            failures.append(_prior_hold(record, invoice.invoice_no))
         exact = same_number and record.currency == invoice.currency and record.gross == invoice.gross
         if exact:
             failures.append(_fail(_EXACT_RULE[record.status], invoice.invoice_no, record, invoice.po_ref))

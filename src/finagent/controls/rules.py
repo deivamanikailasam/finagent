@@ -17,6 +17,7 @@ class Rule:
     outcome_on_fail: str
     category: Any
     owner: str
+    owner_basis: str
     threshold: dict[str, Any]
 
 
@@ -39,6 +40,7 @@ def load_rules() -> dict[str, Rule]:
             outcome_on_fail=item["outcome_on_fail"],
             category=item["category"],
             owner=item["owner"]["who"],
+            owner_basis=item["owner"]["basis"],
             threshold=item["threshold"] or {},
         )
         for item in spec["rules"]

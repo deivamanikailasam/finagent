@@ -1,0 +1,34 @@
+# Fraud-indicator configuration (decision log X). Patterns run on NFKC, casefolded text with zero-width characters removed.
+# A hit is decision support only: the system exposes the evidence and never labels anyone.
+version: 1
+escalate_threshold: 2
+bank_changed_within_days: 30
+
+text_indicators:
+  urgent_or_secret_payment:
+    - '\burgent(?:ly)?\b'
+    - '\bsecret(?:ly)?\b'
+    - '\bconfidential(?:ly)?\b'
+    - '\b(?:pay|payment|release)\b.{0,40}\bimmediately\b'
+    - '\bimmediately\b.{0,40}\b(?:pay|payment|release)\b'
+    - '\bkeep\s+(?:this|it)\s+(?:quiet|between\s+us)\b'
+  bypass_approval:
+    - '\bbypass\w*\b.{0,40}\bapprov\w*'
+    - '\bskip\w*\b.{0,40}\bapprov\w*'
+    - '\bwithout\b.{0,20}\bapproval\b'
+    - '\bdo\s+not\s+ask\b.{0,30}\bapprover\b'
+  disable_checks:
+    - '\bdisabl\w*\b.{0,40}\b(?:checks?|controls?|detection|validation)\b'
+    - '\bskip\w*\b.{0,40}\b(?:checks?|controls?|detection|validation)\b'
+    - '\bturn\s+off\b.{0,40}\b(?:checks?|controls?|detection|validation)\b'
+    - '\bignore\b.{0,40}\b(?:polic(?:y|ies)|checks?|controls?|rules?)\b'
+
+structural_indicators:
+  - changed_bank_details
+  - vendor_name_mismatch
+
+# Not an indicator. It adds a Vendor Governance verification task to the next action (decision log X).
+bank_detail_claim:
+  - '\bnew\b.{0,30}\b(?:bank|account)\b'
+  - '\bbank\b.{0,30}\bchanged\b'
+  - '\bchanged?\b.{0,30}\bbank\b'
