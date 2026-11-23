@@ -170,6 +170,11 @@ class ApprovalRecord:
     reason: str | None
     response_json: str | None
 
+    @property
+    def outcome(self) -> str:
+        """The recommended outcome, read from the payload the approval is bound to."""
+        return json.loads(self.payload_json)["outcome"]
+
 
 @dataclass(frozen=True)
 class EscalationRecord:

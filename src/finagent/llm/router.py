@@ -14,6 +14,7 @@ from finagent.llm.prompt import (
     build_prompt,
     prompt_hash,
 )
+from finagent.llm.validator import validate
 
 MAX_MODEL_CALLS = 2  # the first call and one repair
 
@@ -55,7 +56,9 @@ class Router:
         rationale_source: str,
         config: ModelConfig | None = None,
         audit: Callable[..., None] | None = None,
+        raw_sink: Callable[[int, str], None] | None = None,
     ) -> None:
+        self._raw_sink = raw_sink
         self._primary = primary
         self._source = rationale_source
         self._config = config
@@ -75,6 +78,14 @@ class Router:
             output_tokens=response.usage.output_tokens,
             cost_usd=str(cost) if cost is not None else "unpriced",
         )
+
+    def _keep_raw(self, hop: int, raw_text: str) -> None:
+        if self._raw_sink is None:
+            return
+        try:
+            self._raw_sink(hop, raw_text)
+        except OSError:  # losing the stored copy must not lose a usable reply
+            self._audit("raw_store_failed", hop=hop)
 
     def rationale(self, evaluation: RationaleInput, chunks: Sequence[PromptChunk] = ()) -> RouterResult:
         prompt = build_prompt(evaluation, chunks)
@@ -97,9 +108,14 @@ class Router:
                     break
                 model = response.model
                 stops[str(response.stop_reason)] += 1
+                self._keep_raw(hop, response.raw_text)
                 problem = _problem(response)
-                self._record(hop, digest, response, problem or "ok")
-                if problem is None:
+                errors = (
+                    (problem,)
+                    if problem
+                    else tuple(str(item) for item in validate(response.parsed, evaluation, allowed))
+                )
+                self._record(hop, digest, response, errors[0] if errors else "ok")
+                if not errors:
                     return RouterResult("LLM", response.parsed, digest, model, calls, dict(stops))
-                errors = (problem,)
         return RouterResult("TEMPLATE", template_rationale(evaluation), digest, model, calls, dict(stops))

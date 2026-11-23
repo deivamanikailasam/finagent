@@ -18,12 +18,14 @@ from finagent.domain.results import (
     Fact,
     FinalResult,
     Inference,
+    PolicyFinding,
     Recommendation,
     Unknown,
     next_review_date,
 )
 from finagent.llm.prompt import PromptChunk, PromptLine, RationaleInput, build_prompt, prompt_hash
 from finagent.llm.router import Router
+from finagent.llm.validator import store_raw
 from finagent.obs.redaction import redact
 from finagent.orchestration.graph import PAUSED, SPEC, RunState
 from finagent.rag.templates import TEMPLATES
@@ -231,6 +233,7 @@ def _rationale_input(state: RunState) -> RationaleInput:
         exceptions=tuple(ExceptionRecord.model_validate(item) for item in sections["exceptions"]),
         unknowns=tuple(Unknown.model_validate(item) for item in state.unknowns),
         lines=tuple(PromptLine(line["qty"], line["unit_price"], line["line_total"]) for line in lines),
+        findings=tuple(PolicyFinding.model_validate(item) for item in sections["findings"]),
     )
 
 
@@ -249,7 +252,12 @@ def _record_rationale(state: RunState, ctx: NodeContext) -> None:
         ctx.deps.audit(state.run_id, "llm_call", outcome, **detail)
 
     config = ctx.deps.model_config
-    result = Router(ctx.deps.llm, config.rationale_source, config, audit).rationale(evaluation, chunks)
+
+    def keep_raw(hop: int, raw_text: str) -> None:
+        store_raw(ctx.deps.home / "llm_raw" / f"{state.run_id}-{digest[:12]}-{hop}.txt", raw_text)
+
+    router = Router(ctx.deps.llm, config.rationale_source, config, audit, keep_raw)
+    result = router.rationale(evaluation, chunks)
     state.model_id = result.model
     state.llm_response = {
         "source": result.source,
@@ -259,22 +267,49 @@ def _record_rationale(state: RunState, ctx: NodeContext) -> None:
     }
 
 
+def _template_basis(state: RunState) -> tuple[str, ...]:
+    basis = [item["failed_rule"] for item in state.sections["exceptions"]] or ["CALC-GROSS"]
+    return tuple(dict.fromkeys(basis))
+
+
+def _use_template_rationale(state: RunState) -> None:
+    state.rationale_source = "TEMPLATE"
+    state.sections["inferences"] = [
+        Inference(
+            id="INF-1",
+            statement=f"Recommended {state.outcome}. {state.next_action}.",
+            basis_ids=_template_basis(state),
+            source="TEMPLATE",
+        ).model_dump(mode="json")
+    ]
+
+
+def _use_model_rationale(state: RunState, claims: list[dict[str, Any]]) -> None:
+    state.rationale_source = "LLM"
+    state.sections["inferences"] = [
+        Inference(
+            id=f"INF-{index}",
+            statement=claim["text"],
+            basis_ids=tuple(dict.fromkeys((*claim["citation_ids"], *claim["number_refs"])))
+            or _template_basis(state),
+            source="LLM",
+        ).model_dump(mode="json")
+        for index, claim in enumerate(claims, 1)
+    ]
+
+
 def draft_rationale(state: RunState, ctx: NodeContext) -> None:
-    """Run the router and record its reply. FinalResult keeps the template until the WP 7.2 validator."""
+    """Show the model's explanation only if it passed the validator; otherwise use the template."""
     try:
         _record_rationale(state, ctx)
     except Exception as exc:  # the explanation can fail; the decision must not
         state.llm_response = None
         ctx.deps.audit(state.run_id, "llm_call", "error", error=type(exc).__name__)
-    basis = [item["failed_rule"] for item in state.sections["exceptions"]] or ["CALC-GROSS"]
-    state.sections["inferences"] = [
-        Inference(
-            id="INF-1",
-            statement=f"Recommended {state.outcome}. {state.next_action}.",
-            basis_ids=tuple(dict.fromkeys(basis)),
-            source="TEMPLATE",
-        ).model_dump(mode="json")
-    ]
+    reply = state.llm_response
+    if reply is not None and reply["source"] == "LLM":
+        _use_model_rationale(state, reply["rationale"]["claims"])
+    else:
+        _use_template_rationale(state)
     state.signal = "done"
 
 
@@ -306,6 +341,7 @@ def _apply_duplicate_hold(state: RunState, ctx: NodeContext) -> None:
         next_review_date=next_review_date(ctx.deps.clock.as_of()),
     )
     state.sections["exceptions"] = [record.model_dump(mode="json"), *state.sections["exceptions"]]
+    _use_template_rationale(state)  # the model explained the earlier outcome, which no longer stands
 
 
 def _block_rule(state: RunState) -> str:
@@ -602,6 +638,6 @@ def build_result(state: RunState) -> FinalResult | None:
             confidence=Decimal(state.confidence),
             next_action=state.next_action,
             owner=state.owner,
-            rationale_source="TEMPLATE",
+            rationale_source=state.rationale_source,
         ),
     )

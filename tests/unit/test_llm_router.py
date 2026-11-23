@@ -93,7 +93,7 @@ def test_each_hop_is_audited_with_the_required_fields():
 
 
 @pytest.mark.parametrize("mode", ["injection_obeying", "invented_citation", "malformed"])
-def test_model_text_never_reaches_the_final_result_before_the_validator(mode):
+def test_unusable_model_text_never_reaches_the_final_result(mode):
     report = run_case("FIN-001", llm=FakeLLM(mode))
     assert report.outcome == "APPROVE_FOR_POSTING"
     assert report.result.recommendation.rationale_source == "TEMPLATE"

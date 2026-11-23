@@ -1,0 +1,21 @@
+# Claims the model may never make (decision log XI). Patterns run on normalised, lower-case text.
+patterns:
+  - intent: status_claim
+    regex: '\b(verified|approved|authori[sz]ed|cleared)\b'
+  - intent: safe_to_pay
+    regex: '\b(safe|fine|ok|okay)\s+to\s+(pay|post|release)\b'
+  - intent: payment_can_proceed
+    regex: '\bpayment\b.{0,30}\b(can|may|should|could)\s+(now\s+)?(go\s+ahead|proceed)\b'
+  - intent: release_payment
+    regex: '\brelease\b.{0,20}\bpayment\b|\bpayment\b.{0,15}\breleased?\b'
+  - intent: fraud_word
+    regex: '\b(fraud|frauds|fraudulent|fraudulently|fraudster|fraudsters|scam|scammer|scammers)\b'
+  - intent: first_person_approval
+    regex: '\b(i|we)\s+(have\s+|hereby\s+)?(approve|approved|authori[sz]e|authori[sz]ed|clear|cleared|verify|verified)\b'
+
+# Removed before matching, so a required phrase is not flagged. Other text in the claim is still checked.
+allowed_contexts:
+  - requires approval
+  - approval is required
+  - awaiting approval
+  - Financial Crime and Controls

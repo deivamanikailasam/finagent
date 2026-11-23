@@ -57,6 +57,7 @@ class RunState:
     prompt_hash: str | None = None
     model_id: str | None = None
     llm_response: dict[str, Any] | None = None
+    rationale_source: str = "TEMPLATE"
     actions: list[dict[str, Any]] = field(default_factory=list)
 
     def to_json(self) -> str:
