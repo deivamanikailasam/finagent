@@ -155,6 +155,12 @@ class ToolRunner:
             "unknown", unknown=Unknown(source=declaration.name, reason=reason), attempts=attempts
         )
 
+    def charge(self) -> None:
+        """Spend one invocation on work that runs several queries as one call (decision log VII)."""
+        if self.tool_calls >= self._limit:
+            raise BudgetExceeded(f"tool-call budget of {self._limit} used")
+        self.tool_calls += 1
+
     def call(self, name: str, args: Mapping[str, Any]) -> ToolResult:
         if name not in self._tools or name not in self._declarations or name not in TOOL_SCHEMAS:
             raise KeyError(f"tool is not available: {name}")

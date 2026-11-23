@@ -298,6 +298,17 @@ class ApprovalService:
             problems.append("delegation_invalid")
         return problems
 
+    def invalidate(self, approval_id: str) -> bool:
+        """Retire an approved request whose decision can no longer be carried out."""
+        started = time.perf_counter()
+        record = self._repo.get(approval_id)
+        if record is None:
+            return False
+        with transaction(self._conn):
+            moved = self._repo.mark_revalidated(approval_id, False, self._clock.now_utc())
+            self._audit(record.run_id, "approval_invalidated", str(moved), started, approval_id=approval_id)
+        return moved
+
     def revalidate(self, approval_id: str) -> RevalidationResult:
         """Recheck time-sensitive facts at Clock now. Any change or read failure invalidates."""
         started = time.perf_counter()
