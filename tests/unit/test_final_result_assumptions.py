@@ -29,6 +29,16 @@ def test_final_result_reports_exactly_the_expected_assumptions(case_id):
 
 
 @pytest.mark.parametrize("case_id", sorted(EXPECTATIONS))
+def test_final_result_cites_the_policy_source_of_its_outcome(case_id):
+    paused = run_case(case_id)
+    assert paused.result.recommendation.citations == ("FIN-POL-001#s3",)
+    block = EXPECTATIONS[case_id]["decision"]
+    decision = {"action": block["action"], "approver": block["approver"], "reason": block.get("reason")}
+    finished = run_case(case_id, decision=decision)
+    assert finished.result.recommendation.citations == ("FIN-POL-001#s3",)
+
+
+@pytest.mark.parametrize("case_id", sorted(EXPECTATIONS))
 def test_assumptions_survive_the_human_decision(case_id):
     block = EXPECTATIONS[case_id]["decision"]
     decision = {"action": block["action"], "approver": block["approver"], "reason": block.get("reason")}

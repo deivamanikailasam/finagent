@@ -342,9 +342,8 @@ def observe_case(case_id: str, expected: Mapping[str, Any]) -> Observation:
         finally:
             conn.close()
         result = detail.result
-        citations = frozenset(
-            citation for item in (*result.findings, *result.exceptions) for citation in item.citations
-        )
+        cited_items = (*result.findings, *result.exceptions, result.recommendation)
+        citations = frozenset(citation for item in cited_items for citation in item.citations)
         context = _Context(case_id, home, service, llm, detail, state, approval, tuple(responses), citations)
         extra = {
             key: _EXTRA_CHECKS[key](context, want) if key in _EXTRA_CHECKS else NO_CHECK

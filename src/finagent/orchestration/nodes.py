@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import Any
 
 from finagent.approvals.service import ApprovalRequest
-from finagent.controls.decision import evaluate
+from finagent.controls.decision import OUTCOME_CITATION, evaluate
 from finagent.controls.duplicates import normalise_invoice_number
 from finagent.controls.rules import load_rules
 from finagent.domain.case import Case
@@ -643,5 +643,6 @@ def build_result(state: RunState) -> FinalResult | None:
             next_action=state.next_action,
             owner=state.owner,
             rationale_source=state.rationale_source,
+            citations=(OUTCOME_CITATION,),
         ),
     )

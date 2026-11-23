@@ -118,6 +118,7 @@ class Recommendation(DomainModel):
     next_action: NonBlank
     owner: NonBlank
     rationale_source: Source
+    citations: tuple[NonBlank, ...] = ()  # the policy source for the outcome itself
 
     @model_validator(mode="after")
     def _category_matches_outcome(self) -> "Recommendation":
